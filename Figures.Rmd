@@ -1,0 +1,1960 @@
+---
+title: "CellMentor_figures"
+author: "Anonimus"
+date: "2025-02-16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = FALSE
+)
+library(splatter)
+library("scater")
+library("VariantAnnotation")
+library("ggplot2")
+library(Seurat)
+library(cowplot)
+library(dplyr)
+library(CellMentor)
+library(qs)
+library(dittoSeq)
+# install.packages('profvis')
+library(profvis)
+library(devtools)
+# install_github('linxihui/NNLM')
+library(NNLM)
+# devtools::install_github("gdurif/pCMF", subdir="pkg", ref="prod")
+library(pCMF)
+# install.packages("glmpca")
+library(glmpca)
+library(mclust)
+library(cluster)
+library(aricode)
+# install_github("ramhiser/clusteval")
+# library(clusteval)
+# install.packages('clevr')
+library(clevr)
+library(SingleR)
+library(cowplot)
+library(pheatmap)
+library(gridExtra)
+# remotes::install_github("alserglab/mascarade")
+library(mascarade)
+library(data.table)
+library(ggplot2)
+library(SeuratData)
+library(harmony)
+library(ggpubr)
+library(tibble)
+```
+
+```{r}
+cbPalette <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00",  "#999999", "#CC79A7")
+```
+
+```{r include=FALSE}
+baron <- qread('save_data/6tools_baron_scanvi.qs')
+pbmc <- qread('save_data/simulation_6tools_pbmc_scanvi.qs') 
+melanoma <- qread('save_data/6tools_melanoma_scanvi.qs') 
+
+sim_rare <- qread('save_data/simulation_6tools_rare_scanvi.qs') 
+sim_merge <- qread('save_data/simulation_6tools_newcelltype_newcelltype_merge2_6_final_scanvi.qs')
+sim_new_group <- qread('save_data/simulation_6tools_newcelltype_newcelltype_exclude4_final_scanvi.qs')
+
+simulations <- list()
+for(i in 1:10) {
+  filename <- sprintf("save_data_v2/simulation_6tools_wobatch_final_%d.qs", i)
+  simulations[[i]] <- qread(filename)
+  simulations[[i]]$celltype <- simulations[[i]]$Group
+}
+
+simulations_batch <- list()
+for(i in 1:10) {
+  filename <- sprintf("save_data_v2/simulation_6tools_batch_final_%d.qs", i)
+  simulations_batch[[i]] <- qread(filename)
+  simulations_batch[[i]]$celltype <- simulations_batch[[i]]$Group
+}
+```
+
+
+```{r fig.height=6, fig.width=12, include=FALSE}
+# Function to calculate entropy
+calculate_entropy <- function(p) {
+  p <- p[p > 0]  # remove zero probabilities
+  -sum(p * log2(p))
+}
+
+calculate_clustering_entropy <- function(clusters, true_labels) {
+  # Create contingency table
+  cont_table <- table(clusters, true_labels)
+  
+  # Normalize to get probabilities
+  p_table <- cont_table / sum(cont_table)
+  
+  # Calculate entropy for each cluster
+  cluster_entropies <- apply(cont_table, 1, function(x) {
+    p <- x/sum(x)
+    calculate_entropy(p)
+  })
+  
+  # Calculate entropy for each cell type
+  celltype_entropies <- apply(cont_table, 2, function(x) {
+    p <- x/sum(x)
+    calculate_entropy(p)
+  })
+  
+  list(
+    cluster_entropies = cluster_entropies,         # entropy within each cluster
+    celltype_entropies = celltype_entropies,       # entropy for each cell type
+    mean_cluster_entropy = mean(cluster_entropies), # average cluster heterogeneity
+    mean_celltype_entropy = mean(celltype_entropies) # average cell type scattering
+  )
+}
+```
+
+```{r fig.height=4, fig.width=12, include=FALSE}
+# Function to calculate metrics for one dataset
+calculate_dataset_metrics <- function(seu_obj) {
+  seurat_clusters <- seu_obj$Seurat_clusters
+  cellmentor_clusters <- seu_obj$CellMentor_clusters
+  ica_clusters <- seu_obj$ICA_clusters
+  nmf_clusters <- seu_obj$NMF_clusters
+  pcmf_clusters <- seu_obj$pCMF_clusters
+  gbm_clusters <- seu_obj$GBM_clusters
+  scanvi_clusters <- seu_obj$scanvi_clusters
+  true_labels <- seu_obj$celltype
+  
+  # Calculate entropies
+  seurat_entropy <- calculate_clustering_entropy(seurat_clusters, true_labels)
+  cellmentor_entropy <- calculate_clustering_entropy(cellmentor_clusters, true_labels)
+  ica_entropy <- calculate_clustering_entropy(ica_clusters, true_labels)
+  nmf_entropy <- calculate_clustering_entropy(nmf_clusters, true_labels)
+  pcmf_entropy <- calculate_clustering_entropy(pcmf_clusters, true_labels)
+  gbm_entropy <- calculate_clustering_entropy(gbm_clusters, true_labels)
+  scanvi_entropy <- calculate_clustering_entropy(scanvi_clusters, true_labels)
+  
+  # Return metrics list
+  list(
+    ARI = c(
+      PCA = adjustedRandIndex(seurat_clusters, true_labels),
+      ICA = adjustedRandIndex(ica_clusters, true_labels),
+      NMF = adjustedRandIndex(nmf_clusters, true_labels),
+      pCMF = adjustedRandIndex(pcmf_clusters, true_labels),
+      'GLM-PCA' = adjustedRandIndex(gbm_clusters, true_labels),
+      SCANVI = adjustedRandIndex(scanvi_clusters, true_labels),
+      CellMentor = adjustedRandIndex(cellmentor_clusters, true_labels)
+    ),
+    NMI = c(
+      PCA = NMI(seurat_clusters, true_labels),
+      ICA = NMI(ica_clusters, true_labels),
+      NMF = NMI(nmf_clusters, true_labels),
+      pCMF = NMI(pcmf_clusters, true_labels),
+      'GLM-PCA' = NMI(gbm_clusters, true_labels),
+      SCANVI = NMI(scanvi_clusters, true_labels),
+      CellMentor = NMI(cellmentor_clusters, true_labels)
+    )
+  )
+}
+# Create matrix for each metric
+create_metric_matrix <- function(metric_name) {
+  matrix(c(
+    baron_metrics[[metric_name]],
+    pbmc_metrics[[metric_name]],
+    melanoma_metrics[[metric_name]]
+  ), 
+  nrow = length(methods), 
+  ncol = length(datasets),
+  dimnames = list(methods, datasets))
+}
+```
+
+
+```{r include=FALSE}
+calculate_dataset_metrics_harmony <- function(seu_obj) {
+  seurat_clusters <- seu_obj$Seurat_clusters
+  cellmentor_clusters <- seu_obj$CellMentor_clusters
+  harmony_clusters <- seu_obj$harmony_clusters
+  ica_clusters <- seu_obj$ICA_clusters
+  nmf_clusters <- seu_obj$NMF_clusters
+  pcmf_clusters <- seu_obj$pCMF_clusters
+  gbm_clusters <- seu_obj$GBM_clusters
+  scanvi_clusters <- seu_obj$scanvi_clusters
+  true_labels <- seu_obj$celltype
+  
+  # Calculate entropies
+  seurat_entropy <- calculate_clustering_entropy(seurat_clusters, true_labels)
+  cellmentor_entropy <- calculate_clustering_entropy(cellmentor_clusters, true_labels)
+  harmony_entropy <- calculate_clustering_entropy(harmony_clusters, true_labels)
+  ica_entropy <- calculate_clustering_entropy(ica_clusters, true_labels)
+  nmf_entropy <- calculate_clustering_entropy(nmf_clusters, true_labels)
+  pcmf_entropy <- calculate_clustering_entropy(pcmf_clusters, true_labels)
+  gbm_entropy <- calculate_clustering_entropy(gbm_clusters, true_labels)
+  scanvi_entropy <- calculate_clustering_entropy(scanvi_clusters, true_labels)
+  
+  # Return metrics list
+  list(
+    ARI = c(
+      PCA = adjustedRandIndex(seurat_clusters, true_labels),
+      Harmony = adjustedRandIndex(harmony_clusters, true_labels),
+      ICA = adjustedRandIndex(ica_clusters, true_labels),
+      NMF = adjustedRandIndex(nmf_clusters, true_labels),
+      pCMF = adjustedRandIndex(pcmf_clusters, true_labels),
+      'GLM-PCA' = adjustedRandIndex(gbm_clusters, true_labels),
+      SCANVI = adjustedRandIndex(scanvi_clusters, true_labels),
+      CellMentor = adjustedRandIndex(cellmentor_clusters, true_labels)
+    ),
+    NMI = c(
+      PCA = NMI(seurat_clusters, true_labels),
+      Harmony = NMI(harmony_clusters, true_labels),
+      ICA = NMI(ica_clusters, true_labels),
+      NMF = NMI(nmf_clusters, true_labels),
+      pCMF = NMI(pcmf_clusters, true_labels),
+      'GLM-PCA' = NMI(gbm_clusters, true_labels),
+      SCANVI = NMI(scanvi_clusters, true_labels),
+      CellMentor = NMI(cellmentor_clusters, true_labels)
+    )
+  )
+}
+```
+
+# Real data
+
+```{r include=FALSE}
+melanoma <- melanoma %>% 
+  FindNeighbors(dims = 1:68, reduction = 'CellMentor', verbose = F) %>% 
+  FindClusters(resolution = 0.2, verbose = F)
+
+melanoma$CellMentor_clusters <- melanoma$RNA_snn_res.0.2
+
+# DimPlot(melanoma, reduction = 'umap_cellmentor')
+```
+
+```{r include=FALSE}
+pbmc <- pbmc %>% 
+  FindNeighbors(dims = 1:75, reduction = 'CellMentor', verbose = F) %>% 
+  FindClusters(resolution = 0.1, verbose = F)
+
+pbmc$CellMentor_clusters <- pbmc$RNA_snn_res.0.1
+
+# DimPlot(pbmc, reduction = 'umap_cellmentor', group.by = 'CellMentor_clusters')
+```
+
+## Pancreas 
+
+```{r echo=FALSE}
+baron <- baron %>% 
+  FindNeighbors(dims = 1:97, reduction = 'CellMentor', verbose = F) %>% 
+  FindClusters(resolution = 0.1, verbose = F)
+
+baron$CellMentor_clusters <- baron$RNA_snn_res.0.1
+
+# DimPlot(baron, group.by = 'celltype', reduction = 'umap_cellmentor')
+# DimPlot(baron, group.by = 'CellMentor_clusters', reduction = 'umap_cellmentor')
+# DimPlot(baron, group.by = 'celltype')
+```
+
+```{r echo=FALSE, fig.height=10, fig.width=10}
+FeaturePlot(baron, reduction = 'umap_cellmentor', features = c('INS', 'MAFA', 'PCSK1', 'SLC30A8', #beta
+                     'GCG', 'TTR'))
+```
+
+```{r echo=FALSE, fig.height=3, fig.width=6}
+alpha_check <- subset(baron, celltype == 'alpha' & CellMentor_clusters == 1)
+alpha <- subset(baron, celltype == 'alpha' | celltype == 'beta')
+alpha_check <- merge(alpha_check, alpha)
+alpha_check <- JoinLayers(alpha_check)
+ref <- HumanPrimaryCellAtlasData()
+
+reference =  h.baron_dataset()
+# Perform annotation
+pred <- SingleR::SingleR(test = as.SingleCellExperiment(alpha_check), ref = reference$data, labels = reference$celltypes)
+pred_plot <- pred
+pred_plot$scores <- pred$scores[, c("alpha", "beta")]
+
+# Extract labels from pred_plot
+labels <- pred_plot %>% as.data.frame() %>% tibble::rownames_to_column("cell_id")
+
+# Extract celltype information
+celltype <- as.data.frame(colData(as.SingleCellExperiment(alpha_check)))[,"celltype", drop=FALSE] %>% tibble::rownames_to_column("cell_id")
+
+joined_df <- left_join(labels, celltype, by = "cell_id")
+
+joined_df$order <- with(joined_df, 
+  ifelse(labels == "beta" & celltype == "alpha", 1,
+  ifelse(labels == "beta" & celltype == "beta", 2,
+  ifelse(labels == "alpha" & celltype == "alpha", 4, 3)  # Remaining cells get priority 4
+  )))
+
+# Sort the data
+ordered_cells <- joined_df %>% arrange(order) %>% pull(cell_id)
+
+new_order <- seq_along(rownames(pred_plot))
+names(new_order) <- rownames(pred_plot)
+new_order[ordered_cells] <- seq_along(ordered_cells)
+
+ann <- as.data.frame(colData(as.SingleCellExperiment(alpha_check))[,"celltype",drop=FALSE]) 
+colnames(ann) <- 'Original annotation'
+pancreas_heatmap <- plotScoreHeatmap(pred, 
+                annotation_col=ann, 
+                cells.order = new_order,  silent = T, cluster_rows = F)
+plot(pancreas_heatmap[[4]])
+# labels.use = c('alpha', 'beta'),
+```
+
+```{r eval=FALSE, include=FALSE}
+
+
+ggsave("pancreas_heatmaps.png", pancreas_heatmap[[4]], 
+       width = 6, height = 4,
+       units = "in",
+       dpi = 600)
+```
+
+```{r}
+# baron$celltype[baron$celltype == "alpha" & baron$CellMentor_clusters == 1] <- "beta"
+```
+
+```{r include=FALSE}
+# Calculate metrics for all datasets
+baron_metrics <- calculate_dataset_metrics(baron)
+pbmc_metrics <- calculate_dataset_metrics(pbmc)
+melanoma_metrics <- calculate_dataset_metrics(melanoma)
+
+# Create data frame for heatmap
+metrics <- c("ARI", "NMI")
+methods <- c("PCA", "ICA", "NMF", "pCMF", "GLM-PCA", "SCANVI","CellMentor")
+datasets <- c("Pancreas", "PBMC", "Melanoma")
+```
+
+```{r fig.height=4, fig.width=6, include=FALSE}
+# Create color gradient from 0 to 1
+my_colors <- viridis::viridis(100)
+
+plot_list <- lapply(seq_along(metrics), function(i) {
+  mat <- create_metric_matrix(metrics[i])
+  ph <- pheatmap(mat,
+           main = metrics[i],
+           cluster_rows = FALSE,
+           cluster_cols = FALSE,
+           display_numbers = TRUE,
+           number_format = "%.3f",
+           fontsize_number = 8,
+           breaks = seq(0, 1, length.out = 101),
+           color = my_colors,
+           legend = (i == length(metrics)))  # Show legend only for last plot
+  # Convert pheatmap output to grob
+  grid::grid.grabExpr(print(ph))
+})
+```
+
+```{r echo=FALSE, fig.height=3.8, fig.width=5}
+# Combine heatmaps into one figure
+grid.arrange(grobs = plot_list, ncol = 2, widths = c(1, 1.15))
+```
+
+```{r eval=FALSE, include=FALSE}
+arranged_plot <- grid.arrange(grobs = plot_list, ncol = 2, widths = c(1, 1.15))
+
+ggsave("metrics_heatmaps.pdf", arranged_plot, 
+       width = 5, height = 3.8,
+       units = "in",
+       dpi = 600)
+```
+
+```{r echo=FALSE}
+library(reshape2)
+
+create_metric_matrix_realdata <- function(metric_name) {
+  # Get values for Baron, PBMC, and Melanoma
+  real_data_mat <- matrix(c(
+    baron_metrics[[metric_name]],
+    pbmc_metrics[[metric_name]],
+    melanoma_metrics[[metric_name]]
+  ), 
+  nrow = length(methods), 
+  ncol = 3,
+  dimnames = list(methods, c("Pancreas", "PBMC", "Melanoma")))
+
+}
+# Create a data frame for plotting
+plot_data <- lapply(metrics, function(metric_name) {
+  mat <- create_metric_matrix_realdata(metric_name)
+  df <- as.data.frame(mat)
+  df$Method <- rownames(df)
+  df$Metric <- metric_name
+  return(df)
+}) %>% do.call(rbind, .)
+
+# Reshape data for ggplot2
+plot_data_long <- melt(plot_data, id.vars = c("Method", "Metric"), 
+                       variable.name = "Dataset", value.name = "Score")
+# Create grouped bar plots for each metric
+plots <- lapply(unique(plot_data_long$Metric), function(metric_name) {
+  ggplot(subset(plot_data_long, Metric == metric_name), 
+         aes(x = Dataset, y = Score, fill = Method)) +
+    geom_bar(stat = "identity", position = position_dodge()) +
+    scale_fill_manual(values = c(
+ "#CC79A7", "#E69F00", "#56B4E9", "#009E73", "#F0E442" ,"#0072B2", "#D55E00", "#999999")) +
+    labs(title = metric_name, x = "Dataset", y = "Score", fill = "Method") +
+    theme_minimal(base_size = 14) +
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold"),
+      legend.title = element_text(face = "bold"),
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      legend.position = if (metric_name == metrics[2]) "right" else "none" # Show legend for the second plot only
+    )
+})
+plots_real_metrics <- plots
+grid.arrange(grobs = plots, ncol = 2, widths = c(1, 1.4))
+```
+
+```{r eval=FALSE, include=FALSE}
+arranged_plot <- grid.arrange(grobs = plots, ncol = 2, widths = c(1, 1.4))
+
+ggsave("metrics_barplots_realdata.png", arranged_plot, 
+       width = 8, height = 4,
+       units = "in",
+       dpi = 600)
+```
+
+```{r eval=FALSE, include=FALSE}
+
+ggsave("ari_barplots_realdata.png", plots_real_metrics[[1]], 
+       width = 6, height = 6,
+       units = "in",
+       dpi = 600)
+```
+
+```{r include=FALSE}
+# Define function to generate ggplot for a given UMAP and clustering method
+generate_umap_plot <- function(pbmc, umap_reduction, cluster_column, title) {
+  
+  if (cluster_column == "Batch") {
+    umap <- pbmc@reductions[[umap_reduction]]@cell.embeddings
+    dt <- data.table(
+      umap,
+      cluster = as.vector(pbmc[[cluster_column]])[[1]],
+      annotation = pbmc$Batch
+    )
+    colnames(dt) <- c('umap_1', 'umap_2', 'cluster', 'annotation')
+    # Create ggplot
+    ggplot(dt, aes(x = umap_1, y = umap_2)) +
+      geom_point(aes(color = annotation), size = 0.5) +
+      scale_color_manual(values = c('#73d2de', '#d81159')) +
+      theme_classic() +
+      ggtitle(title) +
+      NoLegend() +
+      labs(x = NULL, y = NULL)
+  }
+  else {
+  # Create a data.table for the specific UMAP and clustering
+  umap <- pbmc@reductions[[umap_reduction]]@cell.embeddings
+  dt <- data.table(
+    umap,
+    cluster = as.vector(pbmc[[cluster_column]])[[1]],
+    annotation = pbmc$celltype
+  )
+  colnames(dt) <- c('umap_1', 'umap_2', 'cluster', 'annotation')
+  # Generate mask table for the clusters
+  maskTable <- generateMask(
+    dims = pbmc@reductions[[umap_reduction]]@cell.embeddings,
+    clusters = as.vector(pbmc[[cluster_column]])[[1]]
+  )
+  colnames(maskTable) <- c("umap_1", "umap_2", "part", "group", "cluster")
+  # Create ggplot
+  ggplot(dt, aes(x = umap_1, y = umap_2)) +
+    geom_point(aes(color = annotation), size = 0.5) +
+    geom_path(data = maskTable, aes(group = group)) +
+    # coord_fixed() +
+    scale_color_manual(values = my_colors) +
+    theme_classic() +
+    ggtitle(title) +
+    NoLegend() +
+    labs(x = NULL, y = NULL)
+  }
+}
+```
+
+## PBMC 
+
+```{r include=FALSE}
+ACCEPTED_METHODS <- c(
+    "10x Chromium (v2) A",
+    "10x Chromium (v2) B",
+    "10x Chromium (v3)",
+    "10x Chromium (v2)"
+  )
+  
+  CELL_TYPES_TO_KEEP <- c(
+    "B cell",
+    "CD14+ monocyte",
+    "CD4+ T cell",
+    "Cytotoxic T cell",
+    "Natural killer cell"
+  )
+  
+  # Load and process data
+  utils::data("pbmcsca", envir = environment())
+  if (!exists("pbmcsca")) {
+    stop("Could not load zheng_data. Please ensure the package is properly installed.")
+  }
+  pbmcsca <- Seurat::UpdateSeuratObject(pbmcsca)
+  # Quality control
+  pbmcsca[["percent.mt"]] <- PercentageFeatureSet(pbmcsca, pattern = "^MT-")
+  pbmcsca <- subset(pbmcsca,
+                    subset = Method %in% ACCEPTED_METHODS & 
+                      nFeature_RNA < 4000 & 
+                      percent.mt < 5
+  )
+```
+
+```{r include=FALSE}
+pbmc$Batch <- pbmcsca$Experiment
+pbmc <- pbmc %>%
+      NormalizeData() %>%
+      FindVariableFeatures() %>%
+      ScaleData() %>%
+      RunPCA(verbose=FALSE) %>%
+      RunHarmony(., 'Batch',
+           lambda = 1, verbose = FALSE) %>% 
+      RunUMAP(reduction = "harmony", dims = 1:20, verbose=F, reduction.name = 'umap_harmony') %>% 
+      FindNeighbors(dims = 1:15, reduction = 'harmony') %>%
+      FindClusters(resolution = 0.2)
+    
+pbmc$harmony_clusters <- pbmc$RNA_snn_res.0.2
+```
+
+```{r include=FALSE}
+my_colors <- c("#6495EDFF", "#FF69B4FF", "#BA55D3FF",  "#87CEEBFF", "#F08080FF", 
+               "#9ACD32FF", "#4682B4FF",  "#DDA0DDFF", "#FFA07AFF", "#8FBC8BFF",
+               "#40E0D0FF",  "#F0E68CFF", "#5F9EA0FF", "#D2B48CFF",  
+               "#32CD32FF",  
+               "#FFDAB9FF"  )
+
+pbmc_metrics_harmony <- calculate_dataset_metrics_harmony(pbmc)
+# Convert metrics into a data frame for bar plot
+metric_names <- names(pbmc_metrics_harmony[1:2])
+methods <- c("PCA", "Harmony", "ICA", "NMF", "pCMF", "GLM-PCA", "SCANVI", "CellMentor")
+metric_values <- unlist(pbmc_metrics_harmony[1:2])
+
+# Create data frame for ggplot
+metrics_df <- data.frame(
+  Method = rep(methods, times = length(metric_names)),
+  Metric = rep(metric_names, each = length(methods)),
+  Value = metric_values
+)
+
+p <- ggplot(metrics_df, aes(x = Metric, y = Value, fill = Method)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme_minimal(base_size = 10) +
+  labs(title = "",
+       y = "Score") +
+  scale_fill_manual(values = my_colors) +
+  theme(
+      plot.title = element_text(hjust = 0.5, face = "bold"),
+      legend.title = element_text(face = "bold"),
+      axis.text.x = element_text(angle = 45, hjust = 1)
+    )
+```
+
+```{r echo=FALSE, fig.height=6, fig.width=12}
+my_colors <- c("#F08080FF", 
+               "#9ACD32FF", "#4682B4FF", "#87CEEBFF", "#6495EDFF", "#FFA07AFF", "#FF69B4FF", "#BA55D3FF",  "#DDA0DDFF",  "#8FBC8BFF",
+               "#40E0D0FF",  "#F0E68CFF", "#5F9EA0FF", "#D2B48CFF",  
+               "#32CD32FF",  
+               "#FFDAB9FF"  )
+# Define list of UMAP reductions, clustering methods, and titles
+umap_reductions <- c("umap", "umap", "umap_harmony",
+                     "umap_ica", "umap_nmf", "umap_pcmf", 
+                     "umap_gbm", "umap_scanvi", "umap_cellmentor")
+clustering_methods <- c("Batch", "Seurat_clusters", "harmony_clusters",
+                        "ICA_clusters", "NMF_clusters", "pCMF_clusters", 
+                        "GBM_clusters", "scanvi_clusters", "CellMentor_clusters")
+titles <- c("Batch", "PCA", "Harmony",
+            "ICA", "NMF", "pCMF", 
+            "GLM-PCA", "SCANVI", "CellMentor")
+
+# Generate plots
+plots <- lapply(seq_along(umap_reductions), function(i) {
+  generate_umap_plot(pbmc, umap_reductions[i], clustering_methods[i], titles[i])
+})
+
+plots[[10]] <- p
+
+pbmc_plots <- plots[c(2, 3, 8, 9)]
+# Arrange plots into a grid
+arranged_plot <- plot_grid(plotlist = plots, nrow = 2)
+arranged_plot
+
+
+```
+
+```{r}
+ggsave("pbmc_legend.png", DimPlot(pbmc, group.by = 'celltype', cols = my_colors), 
+       width = 6, height = 3,
+       units = "in",
+       dpi = 600)
+```
+
+## Pancreas
+
+```{r include=FALSE}
+my_colors <- c("#6495EDFF", "#FF69B4FF", "#BA55D3FF",  "#87CEEBFF", "#F08080FF", 
+               "#9ACD32FF", "#4682B4FF",  "#DDA0DDFF", "#FFA07AFF", "#8FBC8BFF",
+               "#40E0D0FF",  "#F0E68CFF", "#5F9EA0FF", "#D2B48CFF",  
+               "#32CD32FF",  
+               "#FFDAB9FF"  )
+
+
+# Convert metrics into a data frame for bar plot
+metric_names <- names(baron_metrics[1:2])
+methods <- c("PCA", "ICA", "NMF", "pCMF", "GLM-PCA", "SCANVI", "CellMentor")
+metric_values <- unlist(baron_metrics[1:2])
+
+# Create data frame for ggplot
+metrics_df <- data.frame(
+  Method = rep(methods, times = length(metric_names)),
+  Metric = rep(metric_names, each = length(methods)),
+  Value = metric_values
+)
+
+p <- ggplot(metrics_df, aes(x = Metric, y = Value, fill = Method)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme_minimal(base_size = 10) +
+  labs(title = "",
+       y = "Score") +
+  scale_fill_manual(values = my_colors) +
+  theme(
+      plot.title = element_text(hjust = 0.5, face = "bold"),
+      legend.title = element_text(face = "bold"),
+      axis.text.x = element_text(angle = 45, hjust = 1)
+    )
+```
+
+```{r echo=FALSE, fig.height=6, fig.width=11}
+my_colors <- c("#F08080FF", "#40E0D0FF", "#FF69B4FF", "#32CD32FF", "#BA55D3FF", "#F0E68CFF", "#5F9EA0FF", "#D2B48CFF",  
+               "#9ACD32FF", "#4682B4FF", "#87CEEBFF", "#6495EDFF", "#FFA07AFF",    "#DDA0DDFF",  "#8FBC8BFF",
+               "#FFDAB9FF"  )
+# Define list of UMAP reductions, clustering methods, and titles
+umap_reductions <- c("umap", 
+                     "umap_ica", "umap_nmf", "umap_pcmf", 
+                     "umap_gbm", "umap_scanvi", "umap_cellmentor")
+clustering_methods <- c("Seurat_clusters",
+                        "ICA_clusters", "NMF_clusters", "pCMF_clusters", 
+                        "GBM_clusters", "scanvi_clusters", "CellMentor_clusters")
+titles <- c("PCA", 
+            "ICA", "NMF", "pCMF", 
+            "GLM-PCA", "SCANVI", "CellMentor")
+
+# Generate plots
+plots <- lapply(seq_along(umap_reductions), function(i) {
+  generate_umap_plot(baron, umap_reductions[i], clustering_methods[i], titles[i])
+})
+
+plots[[8]] <- p
+# Arrange plots into a grid
+arranged_plot <- plot_grid(plotlist = plots, nrow = 2)
+arranged_plot
+
+pancreas_plots <- plots[c(1, 6, 7)]
+```
+
+```{r eval=FALSE, include=FALSE}
+ggsave("baron_umap.png", arranged_plot, 
+       width = 11, height = 6,
+       units = "in",
+       dpi = 600)
+```
+
+```{r}
+ggsave("pancreas_legend.png", DimPlot(baron, group.by = 'celltype', cols = my_colors), 
+       width = 6, height = 3,
+       units = "in",
+       dpi = 600)
+```
+
+## Melanoma
+
+```{r include=FALSE}
+my_colors <- c("#6495EDFF", "#FF69B4FF", "#BA55D3FF",  "#87CEEBFF", "#F08080FF", 
+               "#9ACD32FF", "#4682B4FF",  "#DDA0DDFF", "#FFA07AFF", "#8FBC8BFF",
+               "#40E0D0FF",  "#F0E68CFF", "#5F9EA0FF", "#D2B48CFF",  
+               "#32CD32FF",  
+               "#FFDAB9FF"  )
+
+
+# Convert metrics into a data frame for bar plot
+metric_names <- names(melanoma_metrics[1:2])
+methods <- c("PCA", "ICA", "NMF", "pCMF", "GLM-PCA", "SCANVI", "CellMentor")
+metric_values <- unlist(melanoma_metrics[1:2])
+
+# Create data frame for ggplot
+metrics_df <- data.frame(
+  Method = rep(methods, times = length(metric_names)),
+  Metric = rep(metric_names, each = length(methods)),
+  Value = metric_values
+)
+
+p <- ggplot(metrics_df, aes(x = Metric, y = Value, fill = Method)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme_minimal(base_size = 10) +
+  labs(title = "",
+       y = "Score") +
+  scale_fill_manual(values = my_colors) +
+  theme(
+      plot.title = element_text(hjust = 0.5, face = "bold"),
+      legend.title = element_text(face = "bold"),
+      axis.text.x = element_text(angle = 45, hjust = 1)
+    )
+```
+
+```{r echo=FALSE, fig.height=6, fig.width=11}
+my_colors <- c("#F08080FF", "#32CD32FF", "#40E0D0FF",  "#F0E68CFF", "#5F9EA0FF", "#D2B48CFF",  
+               "#9ACD32FF", "#4682B4FF", "#87CEEBFF", "#6495EDFF", "#FFA07AFF", "#FF69B4FF", "#BA55D3FF",  "#DDA0DDFF",  "#8FBC8BFF",
+               
+                 
+               "#FFDAB9FF"  )
+# Define list of UMAP reductions, clustering methods, and titles
+umap_reductions <- c("umap", 
+                     "umap_ica", "umap_nmf", "umap_pcmf", 
+                     "umap_gbm", "umap_scanvi", "umap_cellmentor")
+clustering_methods <- c("Seurat_clusters",
+                        "ICA_clusters", "NMF_clusters", "pCMF_clusters", 
+                        "GBM_clusters", "scanvi_clusters", "CellMentor_clusters")
+titles <- c("PCA", 
+            "ICA", "NMF", "pCMF", 
+            "GLM-PCA", "SCANVI", "CellMentor")
+
+# Generate plots
+plots <- lapply(seq_along(umap_reductions), function(i) {
+  generate_umap_plot(melanoma, umap_reductions[i], clustering_methods[i], titles[i])
+})
+
+plots[[8]] <- p
+# Arrange plots into a grid
+arranged_plot <- plot_grid(plotlist = plots, nrow = 2)
+arranged_plot
+
+melanoma_plots <- plots[c(1, 6, 7)]
+```
+
+```{r fig.height=4, fig.width=12}
+plot_grid(plotlist = melanoma_plots, nrow = 1)
+```
+
+```{r eval=FALSE, include=FALSE}
+ggsave("melanoma_umap.png", arranged_plot, 
+       width = 11, height = 6,
+       units = "in",
+       dpi = 600)
+```
+
+```{r}
+ggsave("melanoma_legend.png", DimPlot(melanoma, group.by = 'celltype', cols = my_colors), 
+       width = 6, height = 3,
+       units = "in",
+       dpi = 600)
+```
+
+## Plot
+
+```{r fig.height=9, fig.width=12}
+pl <- plot_grid(plot_grid(plotlist = pbmc_plots, nrow = 1),
+plot_grid(plot_grid(plotlist = pancreas_plots, nrow = 1), NULL, nrow = 1, rel_widths = c(3, 1)),
+plot_grid(plot_grid(plotlist = melanoma_plots, nrow = 1), NULL, nrow = 1, rel_widths = c(3, 1)), nrow = 3)
+```
+
+```{r eval=FALSE, include=FALSE}
+ggsave("real_data_figure4.png", pl, 
+       width = 12, height = 9,
+       units = "in",
+       dpi = 600)
+```
+
+# Simulations without batch effect
+
+```{r include=FALSE}
+my_colors <- viridis::viridis(100)
+# Calculate metrics for all simulations
+all_metrics <- lapply(simulations, calculate_dataset_metrics)
+
+# Create matrices for each metric
+metrics <- c("ARI", "NMI", "Purity", "Cluster_Entropy")
+methods <- c("PCA", "ICA", "NMF", "pCMF", "GLM-PCA", "SCANVI","CellMentor")
+datasets <- paste("Sim", 1:10)
+
+create_metric_matrix <- function(metric_name) {
+  matrix(
+    sapply(all_metrics, function(x) x[[metric_name]]),
+    nrow = length(methods),
+    ncol = length(datasets),
+    dimnames = list(methods, datasets)
+  )
+}
+```
+
+```{r fig.height=4, fig.width=18, include=FALSE}
+# Create plot list with custom formatting
+plot_list <- lapply(seq_along(metrics[1:2]), function(i) {
+  mat <- create_metric_matrix(metrics[i])
+  means <- rowMeans(mat)
+  
+  # Add mean and SD columns to matrix
+  mat_with_stats <- cbind(mat, 
+                         Mean = means)
+  ph <- pheatmap(mat_with_stats,
+                 main = metrics[i],
+                 cluster_rows = FALSE,
+                 cluster_cols = FALSE,
+                 display_numbers = TRUE,
+                 number_format = "%.3f",
+                 fontsize_number = 8,
+                 breaks = seq(0, 1, length.out = 101),
+                 color = my_colors,
+                 legend = F)  # Show legend only for last plot
+  
+  # Convert pheatmap output to grob
+  grid::grid.grabExpr(print(ph))
+})
+```
+
+```{r echo=FALSE, fig.height=4, fig.width=10}
+# Combine heatmaps into one figure with custom widths
+grid.arrange(grobs = plot_list, ncol = 2)
+```
+
+```{r eval=FALSE, fig.height=8, fig.width=5, include=FALSE}
+arranged_plot <- grid.arrange(grobs = plot_list, ncol = 1)
+
+ggsave("metrics_heatmaps_simulations.pdf", arranged_plot, 
+       width = 5, height = 8,
+       units = "in",
+       dpi = 600)
+```
+
+```{r fig.height=5, fig.width=12}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(patchwork)
+
+method_colors <- setNames(
+    cbPalette[1:8],
+    names(pbmc_metrics_harmony$ARI)
+  )
+
+plot_line_charts <- function(metrics_indices = 1:2, title = " Score for simulations without batch effect") {
+  metric_data_list <- list()
+  
+  # Process each metric (ARI and NMI)
+  for (i in metrics_indices) {
+    metric_name <- metrics[i]
+    mat <- create_metric_matrix(metric_name)
+    
+    # Convert to dataframe
+    df <- as.data.frame(mat)
+    
+    # Ensure we have method names as rownames
+    if (is.null(rownames(df))) {
+      rownames(df) <- paste0("Method", 1:nrow(df))
+    }
+    
+    # Add method names as a column
+    df$Method <- rownames(df)
+    
+    # Convert to long format
+    df_long <- df %>%
+      pivot_longer(
+        cols = -Method,
+        names_to = "Difficulty",
+        values_to = "Score"
+      )
+    
+    # Add metric name
+    df_long$Metric <- metric_name
+    
+    metric_data_list[[metric_name]] <- df_long
+  }
+  
+  # Combine the data
+  all_data <- bind_rows(metric_data_list)
+  
+  # Determine difficulty levels - assuming column names are 1 to 10
+  difficulty_columns <- setdiff(colnames(create_metric_matrix(metrics[1])), c("Mean"))
+  
+  # If column names are not already 1 to 10, remap them
+  if (!identical(sort(difficulty_columns), as.character(1:10))) {
+    # Create a mapping from existing column names to 1:10
+    n_difficulties <- length(difficulty_columns)
+    if (n_difficulties > 10) {
+      warning("More than 10 difficulty levels found, using only the first 10")
+      difficulty_columns <- difficulty_columns[1:10]
+    } else if (n_difficulties < 10) {
+      warning("Fewer than 10 difficulty levels found, padding to 10")
+      difficulty_columns <- c(difficulty_columns, as.character((n_difficulties+1):10))
+    }
+    
+    # Create a mapping from old names to sequential 1:10
+    name_mapping <- setNames(as.character(1:10), difficulty_columns)
+    
+    # Apply the mapping
+    all_data$Difficulty <- name_mapping[all_data$Difficulty]
+  }
+  
+  # Set factor levels for difficulty (1 to 10 in order)
+  all_data$Difficulty <- factor(all_data$Difficulty, levels = as.character(1:10))
+  
+  # Get unique methods
+  methods <- unique(all_data$Method)
+  
+  # Create a color palette for methods
+  n_methods <- length(methods)
+  
+  # Create a plot for each metric
+  plot_list <- lapply(unique(all_data$Metric), function(metric) {
+    ggplot(
+      filter(all_data, Metric == metric), 
+      aes(x = Difficulty, y = Score, color = Method, group = Method)
+    ) +
+      geom_line(linewidth = 1) +
+      geom_point(size = 3) +
+      labs(
+        title = paste0(metric, title),
+        x = "Level of Difficulty (1=Easiest, 10=Hardest)",
+        y = paste0(metric, " Score")
+      ) +
+      scale_color_manual(values = method_colors) +
+      scale_y_continuous(limits = c(0, 1)) +
+      theme_minimal() +
+      theme(
+        panel.grid.minor = element_blank(),
+        legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5, face = "bold")
+      )
+  })
+  
+  # Return individual plots and combined plot
+  result <- list(
+    plots = plot_list,
+    combined = plot_list[[1]] | plot_list[[2]] + 
+      plot_layout(guides = "collect") & 
+      theme(legend.position = "bottom")
+  )
+  
+  return(result)
+}
+
+# Generate the plots
+result <- plot_line_charts()
+
+# View individual plots
+print(result$plots[[1]]) # ARI plot
+print(result$plots[[2]]) # NMI plot
+
+# View combined plot
+print(result$combined)
+
+# Save the combined plot
+# ggsave("ari_nmi_comparison.pdf", result$combined, width = 12, height = 6)
+```
+
+```{r fig.height=6, fig.width=13, include=FALSE}
+my_colors <- c("#6495EDFF", "#FF69B4FF", "#BA55D3FF",  "#87CEEBFF", "#F08080FF", 
+               "#9ACD32FF", "#4682B4FF",  "#DDA0DDFF", "#FFA07AFF", "#8FBC8BFF",
+               "#40E0D0FF",  "#F0E68CFF", "#5F9EA0FF", "#D2B48CFF",  
+               "#32CD32FF",  
+               "#FFDAB9FF"  )
+```
+
+```{r echo=FALSE, fig.height=6, fig.width=10}
+# Define list of UMAP reductions, clustering methods, and titles
+umap_reductions <- c("umap",
+                     "umap_ica", "umap_nmf", "umap_pcmf", 
+                     "umap_gbm", "umap_scanvi", "umap_cellmentor")
+clustering_methods <- c("Seurat_clusters", 
+                        "ICA_clusters", "NMF_clusters", "pCMF_clusters", 
+                        "GBM_clusters", "scanvi_clusters", "CellMentor_clusters")
+titles <- c("PCA", 
+            "ICA", "NMF", "pCMF", 
+            "GLM-PCA", "SCANVI", "CellMentor")
+
+# Generate plots
+plots <- lapply(seq_along(umap_reductions), function(i) {
+  generate_umap_plot(simulations[[10]], umap_reductions[i], clustering_methods[i], titles[i])
+})
+if (length(plots) %% 2 == 1) {
+  i <- ((length(plots) - 1) / 2) + 1
+  plots <- c(plots[1:i], NULL, plots[(i + 1):length(plots)], NULL)
+}
+# Arrange plots into a grid
+r1 <- plot_grid(plotlist = plots[1:4], nrow = 1)
+r2 <- plot_grid(plotlist = plots[5:7], nrow = 1)
+r2 <- plot_grid('', r2, '', nrow = 1, rel_widths = c(0.1, 1, 0.1))
+arranged_plot <- plot_grid(r1, r2, nrow = 2)
+
+arranged_plot
+```
+
+```{r eval=FALSE, include=FALSE}
+ggsave("simulation_wobatch_umap.png", arranged_plot, 
+       width = 13, height = 6,
+       units = "in",
+       dpi = 600)
+```
+
+# Simulations with batch effect
+
+```{r include=FALSE}
+library(harmony)
+add_harmony_dim <- function(simulation, num_cores = 10) {
+    simulation <- simulation %>%
+      NormalizeData() %>%
+      FindVariableFeatures() %>%
+      ScaleData() %>%
+      RunPCA(verbose=FALSE) %>%
+      RunHarmony(., 'Batch',
+           lambda = 1, verbose = FALSE) %>% 
+      RunUMAP(reduction = "harmony", dims = 1:20, verbose=F, reduction.name = 'umap_harmony') %>% 
+      FindNeighbors(dims = 1:10, reduction = 'harmony') %>%
+      FindClusters(resolution = 0.2)
+    
+    simulation$harmony_clusters <- simulation$originalexp_snn_res.0.2
+    
+  
+  return(simulation)
+}
+```
+
+
+```{r fig.height=4, fig.width=18, include=FALSE}
+my_colors <- viridis::viridis(100)
+# Calculate metrics for all simulations
+all_metrics <- lapply(simulations_batch, calculate_dataset_metrics_harmony)
+
+# Create matrices for each metric
+metrics <- c("ARI", "NMI")
+methods <- c("PCA", "Harmony", "ICA", "NMF", "pCMF", "GLM-PCA", "SCANVI","CellMentor")
+datasets <- paste("Sim", 1:10)
+
+# Create plot list with custom formatting
+plot_list <- lapply(seq_along(metrics), function(i) {
+  mat <- create_metric_matrix(metrics[i])
+  means <- rowMeans(mat)
+  
+  # Add mean and SD columns to matrix
+  mat_with_stats <- cbind(mat, 
+                         Mean = means)
+  ph <- pheatmap(mat_with_stats,
+                 main = metrics[i],
+                 cluster_rows = FALSE,
+                 cluster_cols = FALSE,
+                 display_numbers = TRUE,
+                 number_format = "%.3f",
+                 fontsize_number = 8,
+                 breaks = seq(0, 1, length.out = 101),
+                 color = my_colors,
+                 legend = F)  # Show legend only for last plot
+  
+  # Convert pheatmap output to grob
+  grid::grid.grabExpr(print(ph))
+})
+```
+
+```{r echo=FALSE, fig.height=4, fig.width=10}
+
+# Combine heatmaps into one figure with custom widths
+grid.arrange(grobs = plot_list, ncol = 2)
+```
+
+```{r}
+DimPlot(simulations_batch[[9]], group.by = 'celltype', reduction = 'umap_cellmentor')
+DimPlot(simulations_batch[[9]], group.by = 'celltype', reduction = 'umap_harmony')
+```
+
+```{r eval=FALSE, fig.height=8, fig.width=5, include=FALSE}
+arranged_plot <- grid.arrange(grobs = plot_list, ncol = 1)
+
+ggsave("metrics_heatmaps_simulations.png", arranged_plot, 
+       width = 5, height = 8,
+       units = "in",
+       dpi = 600)
+```
+
+```{r fig.height=5, fig.width=12}
+# Generate the plots
+result2 <- plot_line_charts(title = " Score for simulations with batch effect")
+
+# View individual plots
+print(result2$plots[[1]]) # ARI plot
+print(result2$plots[[2]]) # NMI plot
+
+# View combined plot
+print(result2$combined)
+```
+
+```{r echo=FALSE, fig.height=6, fig.width=13}
+my_colors <- c("#6495EDFF", "#FF69B4FF", "#BA55D3FF",  "#87CEEBFF", "#F08080FF", 
+               "#9ACD32FF", "#4682B4FF",  "#DDA0DDFF", "#FFA07AFF", "#8FBC8BFF",
+               "#40E0D0FF",  "#F0E68CFF", "#5F9EA0FF", "#D2B48CFF",  
+               "#32CD32FF",  
+               "#FFDAB9FF"  )
+
+# Define list of UMAP reductions, clustering methods, and titles
+umap_reductions <- c("umap", "umap", "umap_harmony", 
+                     "umap_ica", "umap_nmf", "umap_pcmf", 
+                     "umap_gbm", "umap_scanvi", "umap_cellmentor")
+clustering_methods <- c("Batch", "Seurat_clusters", "harmony_clusters",
+                        "ICA_clusters", "NMF_clusters", "pCMF_clusters", 
+                        "GBM_clusters", "scanvi_clusters", "CellMentor_clusters")
+titles <- c("Batch", "PCA", "Harmony",
+            "ICA", "NMF", "pCMF", 
+            "GLM-PCA", "SCANVI", "CellMentor")
+
+# Generate plots
+plots <- lapply(seq_along(umap_reductions), function(i) {
+  generate_umap_plot(simulations_batch[[10]], umap_reductions[i], clustering_methods[i], titles[i])
+})
+if (length(plots) %% 2 == 1) {
+  i <- ((length(plots) - 1) / 2) + 1
+  plots <- c(plots[1:i], NULL, plots[(i + 1):length(plots)], NULL)
+}
+# Arrange plots into a grid
+r1 <- plot_grid(plotlist = plots[1:5], nrow = 1)
+r2 <- plot_grid(plotlist = plots[6:9], nrow = 1)
+r2 <- plot_grid('', r2, '', nrow = 1, rel_widths = c(0.1, 1, 0.1))
+arranged_plot <- plot_grid(r1, r2, nrow = 2)
+
+arranged_plot
+```
+
+```{r eval=FALSE, include=FALSE}
+ggsave("simulation7_umap_new.png", arranged_plot, 
+       width = 13, height = 6,
+       units = "in",
+       dpi = 600)
+```
+
+```{r}
+library(ggpubr)
+
+# Combine data from both result sets
+combined_data <- bind_rows(
+  result$plots[[1]]$data %>% rbind(data.frame(Method = rep('Harmony', 10), Difficulty = seq(1, 10, 1), 
+  Score = rep(NA, 10), Metric = rep('ARI', 10))) %>% mutate(Dataset = "Dataset 1"),
+  result2$plots[[1]]$data %>% mutate(Dataset = "Dataset 2")
+)
+
+# Create each plot
+p1 <- ggplot(
+      filter(combined_data, Dataset == "Dataset 1"), 
+      aes(x = Difficulty, y = Score, color = Method, group = Method)
+    ) +
+      geom_line(linewidth = 1) +
+      geom_point(size = 3) +
+      labs(
+        title = "ARI Score for simulations \nwithout batch effect",
+        x = "Level of Difficulty\n(1=Easiest, 10=Hardest)",
+        y = "ARI Score"
+      ) +
+      scale_color_manual(values = method_colors) +
+      scale_y_continuous(limits = c(0, 1)) +
+      theme_classic() +
+      theme(
+        panel.grid.minor = element_blank(),
+        legend.position = "none",  # Remove individual legend
+        plot.title = element_text(hjust = 0.5, face = "bold")
+      )
+
+p2 <- ggplot(
+      filter(combined_data, Dataset == "Dataset 2"), 
+      aes(x = Difficulty, y = Score, color = Method, group = Method)
+    ) +
+      geom_line(linewidth = 1) +
+      geom_point(size = 3) +
+      labs(
+        title = "ARI Score for simulations \nwith batch effect",
+        x = "Level of Difficulty\n(1=Easiest, 10=Hardest)",
+        y = "ARI Score"
+      ) +
+      scale_color_manual(values = method_colors) +
+      scale_y_continuous(limits = c(0, 1)) +
+      theme_classic() +
+      theme(
+        panel.grid.minor = element_blank(),
+        legend.position = "none",  # Remove individual legend
+        plot.title = element_text(hjust = 0.5, face = "bold")
+      )
+
+# Combine with common legend
+metrics_sim_lines <- ggarrange(p1, p2, ncol = 1, nrow = 2, 
+          common.legend = TRUE, legend = "right")
+
+
+```
+
+```{r echo=FALSE, fig.height=6, fig.width=10}
+# Define list of UMAP reductions, clustering methods, and titles
+umap_reductions <- c("umap","umap_scanvi", "umap_cellmentor")
+clustering_methods <- c( "Seurat_clusters", 
+                        "scanvi_clusters", "CellMentor_clusters")
+titles <- c("PCA", 
+            "SCANVI", "CellMentor")
+
+# Generate plots
+plots <- lapply(seq_along(umap_reductions), function(i) {
+  generate_umap_plot(simulations_batch[[10]], umap_reductions[i], clustering_methods[i], titles[i])
+})
+
+r1_sim_with <- plot_grid(plotlist = plots, nrow = 1)
+arranged_plot2 <- plot_grid(r1, result2$plots[[1]], nrow = 1, rel_widths = c(0.75, 0.25))
+
+plot_grid(arranged_plot, arranged_plot2, nrow = 2)
+```
+
+```{r fig.height=6, fig.width=12}
+p <- plot_grid(plot_grid(r1_sim_wo, r1_sim_with, nrow = 2), 
+          metrics_sim_lines, ncol = 2, rel_widths = c(0.7, 0.35))
+
+ggsave("simulations_lineplots.png", p, 
+       width = 12, height = 6,
+       units = "in",
+       dpi = 600)
+```
+
+# New cell type
+
+```{r echo=FALSE, fig.height=3, fig.width=8}
+# Replace the group names in the original data
+sim_new_group$Group <- gsub('Group', 'CellType', sim_new_group$Group)
+
+
+arranged_plot <- plot_grid(
+          DimPlot(sim_new_group, reduction = 'umap_cellmentor', group.by = 'Group', cols = my_colors) + ggtitle('Original cell types')  + labs(x = 'umapCM_1', y = 'umapCM_2') + theme_classic(), DimPlot(sim_new_group, reduction = 'umap_cellmentor', group.by = 'CellMentor_clusters', cols = cbPalette) + ggtitle('Clusters') + labs(x = 'umapCM_1', y = 'umapCM_2') + theme_classic(), 
+          rel_widths = c(1.2, 1), nrow = 1) 
+
+arranged_plot
+```
+
+```{r fig.height=4, fig.width=4}
+my_colors <- c("#6495EDFF", "#FF69B4FF", "#BA55D3FF",  "#87CEEBFF", "#F08080FF", 
+               "#9ACD32FF", "#4682B4FF",  "#DDA0DDFF", "#FFA07AFF", "#8FBC8BFF",
+               "#40E0D0FF",  "#F0E68CFF", "#5F9EA0FF", "#D2B48CFF",  
+               "#32CD32FF",  
+               "#FFDAB9FF"  )
+
+
+generate_umap_plot(sim_new_group, "umap", "Seurat_clusters", "PCA") +
+  theme(legend.position = "bottom")
+DimPlot(sim_new_group, reduction = 'umap', group.by = 'Seurat_clusters', cols = cbPalette)
+```
+
+```{r eval=FALSE, include=FALSE}
+sim_new_group$celltype <- gsub('Group', 'CellType', sim_new_group$Group)
+ggsave("simulation_newcelltype_pca.png", generate_umap_plot(sim_new_group, "umap", "Seurat_clusters", "PCA") +
+  theme(legend.position = "bottom") +
+    labs(color = ""), 
+       width = 4, height = 4,
+       units = "in",
+       dpi = 600)
+```
+
+```{r eval=FALSE, include=FALSE}
+ggsave("simulation_newcelltype_umap.png", arranged_plot, 
+       width = 8, height = 3,
+       units = "in",
+       dpi = 600)
+```
+
+```{r echo=FALSE, fig.height=4, fig.width=6}
+my_colors <- c("#6495EDFF", "#FF69B4FF", "#BA55D3FF",  "#87CEEBFF", "#F08080FF", 
+               "#9ACD32FF", "#4682B4FF",  "#DDA0DDFF", "#FFA07AFF", "#8FBC8BFF",
+               "#40E0D0FF",  "#F0E68CFF", "#5F9EA0FF", "#D2B48CFF",  
+               "#32CD32FF",  
+               "#FFDAB9FF"  )
+# Extract metrics for simulation[[4]]
+simulation_metrics <- calculate_dataset_metrics_harmony(sim_new_group)
+
+# Convert metrics into a data frame for bar plot
+metric_names <- names(simulation_metrics)
+methods <- c("PCA", "Harmony", "ICA", "NMF", "pCMF", "GLM-PCA", "SCANVI", "CellMentor")
+metric_values <- unlist(simulation_metrics)
+
+# Create data frame for ggplot
+metrics_df <- data.frame(
+  Method = rep(methods, times = length(metric_names)),
+  Metric = rep(metric_names, each = length(methods)),
+  Value = metric_values
+)
+
+p <- ggplot(metrics_df, aes(x = Metric, y = Value, fill = Method)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme_minimal(base_size = 14) +
+  labs(title = "Clustering Methods Comparison",
+       y = "Score") +
+  scale_fill_manual(values = my_colors) +
+  theme(
+      plot.title = element_text(hjust = 0.5)
+    ) 
+
+p
+```
+
+```{r eval=FALSE, include=FALSE}
+ggsave("metrics_barplots_newcelltype.png", p, 
+       width = 8, height = 4,
+       units = "in",
+       dpi = 600)
+```
+
+# Merge celltypes 
+
+```{r echo=FALSE, fig.height=3, fig.width=8}
+# Replace the group names in the original data
+sim_merge$Group <- gsub('Group', 'CellType', sim_merge$Group)
+
+
+arranged_plot <- plot_grid(
+          DimPlot(sim_merge, reduction = 'umap_cellmentor', group.by = 'Group', cols = my_colors) + ggtitle('Original cell types')  + labs(x = 'umapCM_1', y = 'umapCM_2') + theme_classic(), DimPlot(sim_merge, reduction = 'umap_cellmentor', group.by = 'CellMentor_clusters', cols = cbPalette) + ggtitle('Clusters') + labs(x = 'umapCM_1', y = 'umapCM_2') + theme_classic(), 
+          rel_widths = c(1.2, 1), nrow = 1) 
+
+
+arranged_plot
+```
+
+```{r echo=FALSE, fig.height=3, fig.width=8}
+plot_grid(DimPlot(sim_merge, reduction = 'umap', group.by = 'Seurat_clusters', cols = cbPalette) + ggtitle('Clusters')  + theme_classic(), 
+          DimPlot(sim_merge, reduction = 'umap', group.by = 'Group', cols = my_colors) + ggtitle('Original cell types')   + theme_classic(),
+          rel_widths = c(1, 1.2), nrow = 1) 
+```
+
+```{r eval=FALSE, include=FALSE}
+ggsave("simulation_newcelltypemerge_umap.png", arranged_plot, 
+       width = 8, height = 3,
+       units = "in",
+       dpi = 600)
+```
+
+# Rare celltype
+
+```{r fig.height=6, fig.width=11, include=FALSE}
+sim_rare$celltype <- sim_rare$Group
+# sim_rare <- add_harmony_dim(sim_rare)
+my_colors <- c("#6495EDFF", "#FF69B4FF", "#BA55D3FF",  "#87CEEBFF", "#32CD32FF",  "#F08080FF", 
+               "#9ACD32FF", "#4682B4FF",  "#DDA0DDFF", "#FFA07AFF", "#8FBC8BFF",
+               "#40E0D0FF",  "#F0E68CFF", "#5F9EA0FF", "#D2B48CFF",  
+               
+               "#FFDAB9FF"  )
+```
+
+```{r echo=FALSE, fig.height=6, fig.width=13}
+# Define function to generate ggplot for a given UMAP and clustering method
+generate_umap_plot_rare <- function(sim_rare, umap_reduction, cluster_column, title) {
+  
+  # Create a data.table for the specific UMAP and clustering
+  umap <- sim_rare@reductions[[umap_reduction]]@cell.embeddings
+  dt <- data.table(
+    umap,
+    cluster = as.vector(sim_rare[[cluster_column]])[[1]],
+    Annotation = sim_rare$rare_group
+  )
+  colnames(dt) <- c('umap_1', 'umap_2', 'cluster', 'Annotation')
+  
+  # Create ggplot
+  ggplot(dt, aes(x = umap_1, y = umap_2)) +
+    geom_point(aes(color = Annotation), size = 0.5) +
+    # coord_fixed() +
+    scale_color_manual(values = c('#d81159', '#b1a7a6')) +
+    theme_classic() +
+    ggtitle(title) +
+    NoLegend() +
+    labs(x = NULL, y = NULL)
+}
+
+# Define list of UMAP reductions, clustering methods, and titles
+umap_reductions <- c("umap", "umap_harmony", 
+                     "umap_ica", "umap_nmf", "umap_pcmf", 
+                     "umap_gbm", "umap_scanvi", "umap_cellmentor")
+clustering_methods <- c("Seurat_clusters", "harmony_clusters",
+                        "ICA_clusters", "NMF_clusters", "pCMF_clusters", 
+                        "GBM_clusters", "scanvi_clusters", "CellMentor_clusters")
+titles <- c("PCA", "Harmony",
+            "ICA", "NMF", "pCMF", 
+            "GLM-PCA", "SCANVI", "CellMentor")
+sim_rare <- add_harmony_dim(sim_rare)
+sim_rare$rare_group <- sim_rare$Group %>%
+  recode_factor(`Group5` = "Rare CellType", .default = "Other CellTypes")
+
+# Generate plots
+plots <- lapply(seq_along(umap_reductions), function(i) {
+  generate_umap_plot_rare(sim_rare, umap_reductions[i], clustering_methods[i], titles[i])
+})
+
+# Arrange plots into a grid
+r1 <- plot_grid(plotlist = plots[1:5], nrow = 1)
+r2 <- plot_grid(plotlist = plots[6:9], nrow = 1)
+r2 <- plot_grid('', r2, '', nrow = 1, rel_widths = c(0.1, 1, 0.1))
+arranged_plot <- ggarrange(plotlist = plots, nrow = 2, ncol = 4, common.legend = T, legend = "right")
+arranged_plot
+```
+
+```{r}
+DimPlot(sim_rare, group.by = 'celltype', reduction = 'umap_cellmentor')
+DimPlot(sim_rare, group.by = 'celltype')
+```
+
+```{r eval=FALSE, include=FALSE}
+ggsave("sim_rare_umap_new.png", arranged_plot, 
+       width = 13, height = 6,
+       units = "in",
+       dpi = 600)
+```
+
+## Metrics
+
+```{r echo=FALSE, fig.height=4, fig.width=6}
+my_colors <- c("#6495EDFF", "#FF69B4FF", "#BA55D3FF",  "#87CEEBFF", "#F08080FF", 
+               "#9ACD32FF", "#4682B4FF",  "#DDA0DDFF", "#FFA07AFF", "#8FBC8BFF",
+               "#40E0D0FF",  "#F0E68CFF", "#5F9EA0FF", "#D2B48CFF",  
+               "#32CD32FF",  
+               "#FFDAB9FF"  )
+# Extract metrics for simulation[[4]]
+simulation_metrics <- calculate_dataset_metrics(sim_rare)
+
+# Convert metrics into a data frame for bar plot
+metric_names <- names(simulation_metrics[1:2])
+methods <- c("PCA", "ICA", "NMF", "pCMF", "GLM-PCA", "SCANVI", "CellMentor")
+metric_values <- unlist(simulation_metrics[1:2])
+
+# Create data frame for ggplot
+metrics_df <- data.frame(
+  Method = rep(methods, times = length(metric_names)),
+  Metric = rep(metric_names, each = length(methods)),
+  Value = metric_values
+)
+
+p <- ggplot(metrics_df, aes(x = Metric, y = Value, fill = Method)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  theme_minimal(base_size = 14) +
+  labs(title = "Clustering Methods Comparison",
+       y = "Score") +
+  scale_fill_manual(values = my_colors) +
+  theme(
+      plot.title = element_text(hjust = 0.5, face = "bold"),
+      legend.title = element_text(face = "bold"),
+      axis.text.x = element_text(angle = 45, hjust = 1)
+    )
+
+p
+```
+
+
+
+# Supplementary figure
+
+## Select K
+
+```{r}
+# Load required libraries
+library(splatter)
+library(Matrix)
+library(RMTstat)
+library(ggplot2)
+library(gridExtra)
+library(scater)
+
+
+#############################
+# 1. Generate data using Splatter
+#############################
+
+generate_splatter_data <- function(n_groups = 10, n_genes = 2000, n_cells = 800, 
+                                  de_prob = 0.1, de_facLoc = 1, seed = 42) {
+  set.seed(seed)
+  
+  # Create Splatter parameters
+  params <- newSplatParams(
+    nGenes = n_genes,
+    batchCells = n_cells,
+    group.prob = rep(1/n_groups, n_groups),  # Equal group probabilities
+    de.prob = de_prob,                       # Probability of differential expression  
+    de.facLoc = de_facLoc,                   # Location factor for DE genes
+    de.facScale = 0.2,                       # Adds variability in DE
+    dropout.type = "experiment",             # Use experiment-specific dropout
+    dropout.shape = -1,                      # Higher (negative) means more zeroes
+    dropout.mid = 4                          # Midpoint for dropout
+  )
+  
+  # Generate simulated data
+  sim <- splatSimulate(
+    params = params,
+    method = "groups",
+    verbose = FALSE
+  )
+  
+  # Extract counts and cell groups
+  counts <- counts(sim)
+  groups <- colData(sim)$Group
+  
+  # Add row and column names if missing
+  if (is.null(rownames(counts))) rownames(counts) <- paste0("gene_", 1:nrow(counts))
+  if (is.null(colnames(counts))) colnames(counts) <- paste0("cell_", 1:ncol(counts))
+  
+  list(
+    data = counts,
+    groups = groups,
+    # In this case, the approximate rank should be close to the number of groups
+    # but the exact relationship depends on the DE parameters
+    k_approx = n_groups
+  )
+}
+
+####################################
+# 2. Rank estimation methods
+####################################
+
+# Method 1: SVD-based rank estimation with elbow cutoff
+estimate_rank_svd <- function(data_matrix, threshold = 0.9) {
+  
+  data_log <- log1p(data_matrix)
+  
+  if (requireNamespace("irlba", quietly = TRUE)) {
+    svd_result <- irlba::irlba(data_log, nv = min(50, min(dim(data_log))))
+  } else {
+    svd_result <- svd(as.matrix(data_log))
+  }
+  
+  sing_values <- svd_result$d
+  var_explained <- sing_values^2 / sum(sing_values^2)
+  cum_var <- cumsum(var_explained)
+  
+  # Find rank based on variance threshold
+  rank_estimate <- which(cum_var >= threshold)[1]
+  
+  list(
+    rank = rank_estimate,
+    sing_values = sing_values,
+    cum_var = cum_var
+  )
+}
+
+# Method 2: Basic Marchenko-Pastur law without biwhitening
+estimate_rank_mp <- function(data_matrix) {
+  n_genes <- nrow(data_matrix)
+  n_cells <- ncol(data_matrix)
+  
+  data_log <- log1p(data_matrix)
+  
+  gene_means <- rowMeans(data_log)
+  data_centered <- data_log - gene_means
+  
+  cov_matrix <- (1/n_cells) * (data_centered %*% t(data_centered))
+  
+  if (n_genes > 2000) {
+    eigenvalues <- RSpectra::eigs_sym(cov_matrix, k = min(n_genes, 100))$values
+  } else {
+    eigenvalues <- eigen(cov_matrix, symmetric = TRUE)$values
+  }
+  
+  gamma <- n_genes/n_cells
+  upper_edge <- (1 + sqrt(gamma))^2
+  
+  rank_estimate <- sum(eigenvalues > upper_edge)
+  
+  list(
+    rank = rank_estimate,
+    eigenvalues = eigenvalues,
+    upper_edge = upper_edge
+  )
+}
+
+# Method 3: CellMentor SelectRank wrapper
+cellmentor_rank <- function(data_matrix, max_p_value = 0.01, verbose = TRUE) {
+  if (min(data_matrix) >= 0 && max(data_matrix) > 50) {
+    data_log <- log1p(data_matrix)
+  } else {
+    data_log <- data_matrix
+  }
+  
+  result <- tryCatch({
+    SelectRank(
+      train_matrix = data_log,
+      max_p_value = max_p_value,
+      verbose = verbose
+    )
+  }, error = function(e) {
+    if (verbose) cat("CellMentor SelectRank error:", e$message, "\n")
+    return(0)
+  })
+  
+  return(result)
+}
+
+####################################
+# 3. Compare all methods
+####################################
+
+compare_rank_methods <- function(splatter_data, verbose = TRUE) {
+  data_matrix <- splatter_data$data
+  k_approx <- splatter_data$k_approx
+  
+  if (verbose) {
+    cat("Approximate true rank:", k_approx, "\n")
+    cat("Data dimensions:", nrow(data_matrix), "genes x", ncol(data_matrix), "cells\n")
+    cat("Data sparsity:", sum(data_matrix == 0) / prod(dim(data_matrix)) * 100, "%\n")
+  }
+  
+  # Method 1: SVD-based
+  svd_result <- estimate_rank_svd(data_matrix)
+  if (verbose) {
+    cat("SVD-based estimate:", svd_result$rank, "\n")
+  }
+  
+  # Method 2: Basic MP law
+  mp_result <- estimate_rank_mp(data_matrix)
+  if (verbose) {
+    cat("MP law estimate (without biwhitening):", mp_result$rank, "\n")
+  }
+  
+  # Method 3: CellMentor SelectRank
+  cellmentor_result <- cellmentor_rank(data_matrix, verbose = verbose)
+  
+  if (verbose) {
+    cat("CellMentor estimate:", cellmentor_result, "\n")
+  }
+  
+  # Return all results
+  list(
+    true_rank = k_approx,
+    svd_rank = svd_result$rank,
+    mp_rank = mp_result$rank,
+    cellmentor_rank = cellmentor_result,
+    svd_details = svd_result,
+    mp_details = mp_result
+  )
+}
+
+####################################
+# 4. Visualize results
+####################################
+
+visualize_rank_comparison <- function(comparison_results) {
+  # Create data frame for plotting
+  methods <- c("True (approx)", "SVD", "MP", "CellMentor")
+  ranks <- c(
+    comparison_results$true_rank,
+    comparison_results$svd_rank,
+    comparison_results$mp_rank,
+    comparison_results$cellmentor_rank
+  )
+  
+  df <- data.frame(
+    Method = factor(methods, levels = methods),
+    Rank = ranks,
+    Error = abs(ranks - comparison_results$true_rank)
+  )
+  
+  # Plot 1: Bar chart of rank estimates
+  p1 <- ggplot(df, aes(x = Method, y = Rank, fill = Method)) +
+    geom_bar(stat = "identity") +
+    scale_fill_manual(values = c("darkgreen", "skyblue", "steelblue", "darkblue")) +
+    ggtitle("Rank Estimation Comparison") +
+    theme_minimal() +
+    geom_text(aes(label = Rank), vjust = -0.5) + 
+    geom_hline(yintercept = comparison_results$true_rank, linetype = "dashed")
+  
+  # Plot 2: Singular value decay
+  svd_df <- data.frame(
+    Index = 1:length(comparison_results$svd_details$sing_values),
+    SingularValue = comparison_results$svd_details$sing_values
+  )
+  
+  p2 <- ggplot(svd_df, aes(x = Index, y = SingularValue)) +
+    geom_line() +
+    geom_point(size = 1) +
+    geom_vline(xintercept = comparison_results$true_rank, color = "darkgreen", 
+               linetype = "dashed", size = 1) +
+    geom_vline(xintercept = comparison_results$svd_rank, color = "skyblue", 
+               linetype = "dashed") +
+    ggtitle("Singular Value Decay") +
+    theme_minimal() +
+    scale_y_log10() +
+    annotate("text", x = comparison_results$true_rank + 1, 
+             y = max(svd_df$SingularValue) * 0.9, 
+             label = "True Rank", color = "darkgreen")
+  
+  # Plot 3: Eigenvalue distribution with MP threshold
+  eigenvalues <- comparison_results$mp_details$eigenvalues
+  ev_df <- data.frame(Eigenvalue = eigenvalues)
+  
+  p3 <- ggplot(ev_df, aes(x = Eigenvalue)) +
+    geom_histogram(bins = 30, fill = "steelblue", color = "white") +
+    geom_vline(xintercept = comparison_results$mp_details$upper_edge, 
+               color = "red", linetype = "dashed", size = 1) +
+    ggtitle("Eigenvalue Distribution") +
+    theme_minimal() +
+    annotate("text", x = comparison_results$mp_details$upper_edge * 1.1, 
+             y = 20, label = "MP Threshold", color = "red")
+  
+  # Plot 4: Error in rank estimation
+  p4 <- ggplot(df[-1,], aes(x = Method, y = Error, fill = Method)) +
+    geom_bar(stat = "identity") +
+    scale_fill_manual(values = c("skyblue", "steelblue", "darkblue")) +
+    ggtitle("Error in Rank Estimation") +
+    ylab("Absolute Error") +
+    theme_minimal() +
+    geom_text(aes(label = Error), vjust = -0.5)
+  
+  # Arrange plots in a grid
+  grid.arrange(p1, p2, p3, p4, ncol = 2)
+}
+
+
+evaluate_across_conditions <- function() {
+  n_groups_values <- c(5, 10, 15)  # Approximate rank
+  de_prob_values <- c(0.1, 0.2)  # Controls how distinct the groups are
+  
+  results <- data.frame()
+  
+  # Run tests
+  for (n_groups in n_groups_values) {
+    for (de_prob in de_prob_values) {
+      cat(sprintf("Testing: Groups = %d, DE probability = %.2f\n", n_groups, de_prob))
+      
+      # Generate data
+      splatter_data <- generate_splatter_data(
+        n_groups = n_groups,
+        de_prob = de_prob,
+        seed = 42
+      )
+      
+      sparsity <- sum(splatter_data$data == 0) / prod(dim(splatter_data$data)) * 100
+      
+      # Compare methods
+      comparison <- compare_rank_methods(splatter_data, verbose = FALSE)
+      
+      svd_error <- abs(comparison$svd_rank - comparison$true_rank)
+      mp_error <- abs(comparison$mp_rank - comparison$true_rank)
+      cm_error <- abs(comparison$cellmentor_rank - comparison$true_rank)
+      
+      results <- rbind(results, data.frame(
+        n_groups = n_groups,
+        de_prob = de_prob,
+        sparsity = sparsity,
+        svd_rank = comparison$svd_rank,
+        mp_rank = comparison$mp_rank,
+        cm_rank = comparison$cellmentor_rank,
+        svd_error = svd_error,
+        mp_error = mp_error,
+        cm_error = cm_error
+      ))
+    }
+  }
+  
+  return(results)
+}
+
+plot_evaluation_results <- function(results) {
+  ranks_long <- reshape2::melt(
+    results, 
+    id.vars = c("n_groups", "de_prob", "sparsity"),
+    measure.vars = c("svd_rank", "mp_rank", "cm_rank"),
+    variable.name = "method",
+    value.name = "estimated_rank"
+  )
+  
+  ranks_long$method <- gsub("_rank", "", ranks_long$method)
+  ranks_long$method <- factor(ranks_long$method, 
+                             levels = c("svd", "mp", "cm"),
+                             labels = c("SVD", "MP", "CellMentor"))
+  
+  errors_long <- reshape2::melt(
+    results, 
+    id.vars = c("n_groups", "de_prob", "sparsity"),
+    measure.vars = c("svd_error", "mp_error", "cm_error"),
+    variable.name = "method",
+    value.name = "error"
+  )
+  
+  errors_long$method <- gsub("_error", "", errors_long$method)
+  errors_long$method <- factor(errors_long$method, 
+                              levels = c("svd", "mp", "cm"),
+                              labels = c("SVD", "MP", "CellMentor"))
+  
+  p1 <- ggplot(ranks_long, aes(x = n_groups, y = estimated_rank, color = method)) +
+    geom_point(size = 3, position = position_dodge(width = 0.5)) +
+    geom_line(aes(group = interaction(method, de_prob)), 
+              position = position_dodge(width = 0.5)) +
+    geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "darkgray") +
+    facet_wrap(~ de_prob, labeller = label_both) +
+    scale_color_brewer(palette = "Set1") +
+    theme_minimal() +
+    labs(
+      title = "Estimated Rank vs. True Rank",
+      x = "True Rank (Number of Groups)",
+      y = "Estimated Rank",
+      color = "Method"
+    )
+  
+  p2 <- ggplot(errors_long, aes(x = method, y = error, fill = method)) +
+    geom_boxplot() +
+    scale_fill_brewer(palette = "Set1") +
+    theme_minimal() +
+    labs(
+      title = "Rank Estimation Error by Method",
+      x = "Method",
+      y = "Absolute Error",
+      fill = "Method"
+    )
+  
+  p3 <- ggplot(errors_long, aes(x = as.factor(de_prob), y = error, fill = method)) +
+    geom_boxplot(position = position_dodge(width = 0.8)) +
+    scale_fill_brewer(palette = "Set1") +
+    theme_minimal() +
+    labs(
+      title = "Error by DE Probability",
+      x = "DE Probability",
+      y = "Absolute Error",
+      fill = "Method"
+    )
+  
+  list(
+    rank_estimation = p1,
+    error_by_method = p2,
+    error_by_de_prob = p3
+  )
+}
+
+
+comparison <- compare_rank_methods(splatter_data, verbose = TRUE)
+visualize_rank_comparison(comparison)
+
+results <- evaluate_across_conditions()
+
+plots <- plot_evaluation_results(results)
+plots$rank_estimation
+plots$error_by_method
+plots$error_by_de_prob
+```
+
+## Simulations without batch effect
+
+```{r fig.height=6, fig.width=13, include=FALSE}
+my_colors <- c("#6495EDFF", "#FF69B4FF", "#BA55D3FF",  "#87CEEBFF", "#F08080FF", 
+               "#9ACD32FF", "#4682B4FF",  "#DDA0DDFF", "#FFA07AFF", "#8FBC8BFF",
+               "#40E0D0FF",  "#F0E68CFF", "#5F9EA0FF", "#D2B48CFF",  
+               "#32CD32FF",  
+               "#FFDAB9FF"  )
+```
+
+```{r echo=FALSE, fig.height=6, fig.width=10}
+
+sim_suppl_plots_generate <- function(simulation) {
+  # Define list of UMAP reductions, clustering methods, and titles
+  umap_reductions <- c("umap",
+                       "umap_ica", "umap_nmf", "umap_pcmf", 
+                       "umap_gbm", "umap_scanvi", "umap_cellmentor")
+  clustering_methods <- c("Seurat_clusters", 
+                          "ICA_clusters", "NMF_clusters", "pCMF_clusters", 
+                          "GBM_clusters", "scanvi_clusters", "CellMentor_clusters")
+  titles <- c("PCA", 
+              "ICA", "NMF", "pCMF", 
+              "GLM-PCA", "SCANVI", "CellMentor")
+  
+  # Generate plots
+  plots <- lapply(seq_along(umap_reductions), function(i) {
+    generate_umap_plot(simulation, umap_reductions[i], clustering_methods[i], titles[i])
+  })
+  if (length(plots) %% 2 == 1) {
+    i <- ((length(plots) - 1) / 2) + 1
+    plots <- c(plots[1:i], NULL, plots[(i + 1):length(plots)], NULL)
+  }
+  # Arrange plots into a grid
+  r1 <- plot_grid(plotlist = plots[1:4], nrow = 1)
+  r2 <- plot_grid(plotlist = plots[5:7], nrow = 1)
+  r2 <- plot_grid('', r2, '', nrow = 1, rel_widths = c(0.1, 1, 0.1))
+  arranged_plot <- plot_grid(r1, r2, nrow = 2)
+  
+  arranged_plot
+}
+
+sim_suppl_plots <- lapply(simulations, sim_suppl_plots_generate)
+```
+
+```{r eval=FALSE, include=FALSE}
+
+ggsave("simulation_wobatch_umap_suppl_part1.png", plot_grid(plotlist = sim_suppl_plots[1:4], nrow = 4, labels = paste('Simulation', seq(1, 4, 1)), label_y = 1.02, label_x = 0.35), 
+       width = 10, height = 20,
+       units = "in",
+       dpi = 600)
+
+ggsave("simulation_wobatch_umap_suppl_part2.png", plot_grid(plotlist = sim_suppl_plots[5:8], nrow = 4, labels = paste('Simulation', seq(5, 8, 1)), label_y = 1.02, label_x = 0.35), 
+       width = 10, height = 20,
+       units = "in",
+       dpi = 600)
+
+ggsave("simulation_wobatch_umap_suppl_part3.png", plot_grid(plotlist = sim_suppl_plots[9:10], nrow = 4, labels = paste('Simulation', seq(9, 10, 1)), label_y = 1.02, label_x = 0.35), 
+       width = 10, height = 20,
+       units = "in",
+       dpi = 600)
+```
+
+
+## Simulations with batch effect
+
+```{r echo=FALSE, fig.height=6, fig.width=13}
+my_colors <- c("#6495EDFF", "#FF69B4FF", "#BA55D3FF",  "#87CEEBFF", "#F08080FF", 
+               "#9ACD32FF", "#4682B4FF",  "#DDA0DDFF", "#FFA07AFF", "#8FBC8BFF",
+               "#40E0D0FF",  "#F0E68CFF", "#5F9EA0FF", "#D2B48CFF",  
+               "#32CD32FF",  
+               "#FFDAB9FF"  )
+
+sim_batch_suppl_plots_generate <- function(simulation) {
+  # Define list of UMAP reductions, clustering methods, and titles
+  umap_reductions <- c("umap", "umap", "umap_harmony", 
+                       "umap_ica", "umap_nmf", "umap_pcmf", 
+                       "umap_gbm", "umap_scanvi", "umap_cellmentor")
+  clustering_methods <- c("Batch", "Seurat_clusters", "harmony_clusters",
+                          "ICA_clusters", "NMF_clusters", "pCMF_clusters", 
+                          "GBM_clusters", "scanvi_clusters", "CellMentor_clusters")
+  titles <- c("Batch", "PCA", "Harmony",
+              "ICA", "NMF", "pCMF", 
+              "GLM-PCA", "SCANVI", "CellMentor")
+  
+  # Generate plots
+  plots <- lapply(seq_along(umap_reductions), function(i) {
+    generate_umap_plot(simulation, umap_reductions[i], clustering_methods[i], titles[i])
+  })
+  if (length(plots) %% 2 == 1) {
+    i <- ((length(plots) - 1) / 2) + 1
+    plots <- c(plots[1:i], NULL, plots[(i + 1):length(plots)], NULL)
+  }
+  # Arrange plots into a grid
+  r1 <- plot_grid(plotlist = plots[1:5], nrow = 1)
+  r2 <- plot_grid(plotlist = plots[6:9], nrow = 1)
+  r2 <- plot_grid('', r2, '', nrow = 1, rel_widths = c(0.1, 1, 0.1))
+  arranged_plot <- plot_grid(r1, r2, nrow = 2)
+  
+  arranged_plot
+}
+
+sim_batch_suppl_plots <- lapply(simulations_batch, sim_batch_suppl_plots_generate)
+```
+
+```{r eval=FALSE, include=FALSE}
+
+ggsave("simulation_batch_umap_suppl_part1.png", plot_grid(plotlist = sim_batch_suppl_plots[1:4], nrow = 4, labels = paste('Simulation', seq(1, 4, 1)), label_y = 1.02, label_x = 0.28), 
+       width = 12, height = 20,
+       units = "in",
+       dpi = 600)
+
+ggsave("simulation_batch_umap_suppl_part2.png", plot_grid(plotlist = sim_batch_suppl_plots[5:8], nrow = 4, labels = paste('Simulation', seq(5, 8, 1)), label_y = 1.02, label_x = 0.28), 
+       width = 12, height = 20,
+       units = "in",
+       dpi = 600)
+
+ggsave("simulation_batch_umap_suppl_part3.png", plot_grid(plotlist = sim_batch_suppl_plots[9:10], nrow = 4, labels = paste('Simulation', seq(9, 10, 1)), label_y = 1.02, label_x = 0.28), 
+       width = 12, height = 20,
+       units = "in",
+       dpi = 600)
+```
