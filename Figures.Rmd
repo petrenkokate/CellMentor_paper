@@ -54,24 +54,24 @@ cbPalette <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00",
 ```
 
 ```{r include=FALSE}
-baron <- qread('save_data/6tools_baron_scanvi.qs')
-pbmc <- qread('save_data/simulation_6tools_pbmc_scanvi.qs') 
-melanoma <- qread('save_data/6tools_melanoma_scanvi.qs') 
+baron <- qread('../save_data/6tools_baron_scanvi.qs')
+pbmc <- qread('../save_data/simulation_6tools_pbmc_scanvi.qs') 
+melanoma <- qread('../save_data/6tools_melanoma_scanvi.qs') 
 
-sim_rare <- qread('save_data/simulation_6tools_rare_scanvi.qs') 
-sim_merge <- qread('save_data/simulation_6tools_newcelltype_newcelltype_merge2_6_final_scanvi.qs')
-sim_new_group <- qread('save_data/simulation_6tools_newcelltype_newcelltype_exclude4_final_scanvi.qs')
+sim_rare <- qread('../save_data/simulation_6tools_rare_scanvi.qs') 
+sim_merge <- qread('../save_data/simulation_6tools_newcelltype_newcelltype_merge2_6_final_scanvi.qs')
+sim_new_group <- qread('../save_data/simulation_6tools_newcelltype_newcelltype_exclude4_final_scanvi.qs')
 
 simulations <- list()
 for(i in 1:10) {
-  filename <- sprintf("save_data_v2/simulation_6tools_wobatch_final_%d.qs", i)
+  filename <- sprintf("../save_data_v2/simulation_6tools_wobatch_final_%d.qs", i)
   simulations[[i]] <- qread(filename)
   simulations[[i]]$celltype <- simulations[[i]]$Group
 }
 
 simulations_batch <- list()
 for(i in 1:10) {
-  filename <- sprintf("save_data_v2/simulation_6tools_batch_final_%d.qs", i)
+  filename <- sprintf("../save_data_v2/simulation_6tools_batch_final_%d.qs", i)
   simulations_batch[[i]] <- qread(filename)
   simulations_batch[[i]]$celltype <- simulations_batch[[i]]$Group
 }
@@ -1958,3 +1958,159 @@ ggsave("simulation_batch_umap_suppl_part3.png", plot_grid(plotlist = sim_batch_s
        units = "in",
        dpi = 600)
 ```
+
+# Mislabeling challenge
+
+```{r}
+results_list <- qread(paste0('save_data_v3/mislabeling_challenge_results', '_mislabeling_challenge', '.qs'))
+```
+
+```{r}
+# Function to generate UMAP plots
+generate_umap_plot <- function(seu_obj, reduction_name, cluster_col, title_suffix) {
+  p <- DimPlot(seu_obj, 
+               reduction = reduction_name, 
+               group.by = cluster_col,
+               pt.size = 0.5) +
+    ggtitle(paste("CellMentor", title_suffix)) +
+    theme_minimal() +
+    theme(plot.title = element_text(hjust = 0.5, size = 12))
+  return(p)
+}
+
+# Create UMAP plots for all mislabeling percentages
+print("CREATING UMAP PLOTS")
+all_umap_plots <- lapply(names(results_list), function(result_name) {
+  result <- results_list[[result_name]]
+  mislabel_pct <- result$mislabeling_percentage
+  sim_ref <- result$seu_ref
+  sim_test <- result$seu_test
+  
+  # Create reference and test plots
+  p1 <- generate_umap_plot(sim_ref, 'umap_cellmentor', "mislabeled_cells", 'Ref') 
+  p2 <- generate_umap_plot(sim_test, 'umap_cellmentor', "CellMentor_clusters", 'Test')
+  
+  # Arrange plots side by side
+  arranged_plot <- plot_grid(p1, p2, rel_widths = c(1, 1), nrow = 1)
+  
+  # Add title with mislabeling percentage
+  title_text <- paste0("Mislabeling: ", mislabel_pct, "%")
+  arranged_plot <- plot_grid(
+    ggdraw() + draw_label(title_text, fontface = 'bold', size = 14, hjust = 0.5),
+    arranged_plot,
+    ncol = 1,
+    rel_heights = c(0.1, 1)
+  )
+  
+  return(arranged_plot)
+})
+```
+
+```{r}
+generate_umap_plot <- function(seu_obj, reduction_name, cluster_col, title_suffix, show_mislabeled = FALSE) {
+  if (show_mislabeled && "mislabeled_cells" %in% names(seu_obj@meta.data)) {
+    # Create a column to identify mislabeled cells
+    seu_obj$is_mislabeled <- seu_obj$mislabeled_cells == "mislabeled group"
+    
+    # Get UMAP coordinates
+    umap_coords <- Embeddings(seu_obj, reduction = reduction_name)
+    plot_data <- data.frame(
+      UMAP_1 = umap_coords[, 1],
+      UMAP_2 = umap_coords[, 2],
+      cluster = seu_obj@meta.data[[cluster_col]],
+      is_mislabeled = seu_obj$is_mislabeled
+    )
+    
+    # Create plot with different shapes
+    p <- ggplot(plot_data, aes(x = UMAP_1, y = UMAP_2, color = cluster)) +
+            geom_point(size = 2) +  # All cells with cluster colors
+            geom_point(data = plot_data[plot_data$is_mislabeled, ], 
+                       size = 1, shape = 1, color = "black", stroke = 0.5) +  # Black circles around mislabeled
+            ggtitle(paste("CellMentor", title_suffix)) +
+            theme_minimal() +
+            theme(plot.title = element_text(hjust = 0.5, size = 12)) +
+            labs(caption = "Black circles = mislabeled cells")
+    
+  } else {
+    # Default DimPlot for non-reference plots
+    p <- DimPlot(seu_obj, 
+                 reduction = reduction_name, 
+                 group.by = cluster_col,
+                 pt.size = 0.5) +
+      ggtitle(paste("CellMentor", title_suffix)) +
+      theme_minimal() +
+      theme(plot.title = element_text(hjust = 0.5, size = 12))
+  }
+  return(p)
+}
+
+# Create UMAP plots for all mislabeling percentages
+print("CREATING UMAP PLOTS")
+all_umap_plots <- lapply(names(results_list), function(result_name) {
+  result <- results_list[[result_name]]
+  mislabel_pct <- result$mislabeling_percentage
+  sim_ref <- result$seu_ref
+  sim_test <- result$seu_test
+  
+  # Create reference and test plots
+  p1 <- generate_umap_plot(sim_ref, 'umap_cellmentor', "Group_mislabeled", 'Ref', show_mislabeled = TRUE) 
+  p2 <- generate_umap_plot(sim_test, 'umap_cellmentor', "CellMentor_clusters", 'Test', show_mislabeled = FALSE)
+  p3 <- generate_umap_plot(sim_ref, 'umap', "Group_mislabeled", 'Test', show_mislabeled = T) +
+    ggtitle('PCA (Seurat)')
+  # Arrange plots side by side
+  arranged_plot <- plot_grid(p3, p1, p2, nrow = 1)
+  
+  # Add title with mislabeling percentage
+  title_text <- paste0("Mislabeling: ", mislabel_pct, "%")
+  arranged_plot <- plot_grid(
+    ggdraw() + draw_label(title_text, fontface = 'bold', size = 14, hjust = 0.5),
+    arranged_plot,
+    ncol = 1,
+    rel_heights = c(0.1, 1)
+  )
+  
+  return(arranged_plot)
+})
+```
+
+```{r fig.height=22, fig.width=11}
+combined_plot <- plot_grid(plotlist = all_umap_plots, ncol = 1, nrow = 7)
+```
+
+```{r fig.height=3, fig.width=4}
+# Plot results
+library(ggplot2)
+library(reshape2)
+summary_results <- data.frame(
+  mislabeling_percentage = sapply(results_list, function(x) x$mislabeling_percentage),
+  nmi = sapply(results_list, function(x) x$nmi),
+  ari = sapply(results_list, function(x) x$ari),
+  accuracy = sapply(results_list, function(x) x$accuracy),
+  n_cells_mislabeled = sapply(results_list, function(x) x$n_cells_mislabeled)
+)
+# Melt data for plotting
+plot_data <- melt(summary_results[, c("mislabeling_percentage", "nmi", "ari")], 
+                  id.vars = "mislabeling_percentage")
+
+# Create plot
+p <- ggplot(plot_data, aes(x = mislabeling_percentage, y = value, color = variable)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 2) +
+  labs(
+    title = "CellMentor Performance",
+    x = "Mislabeling Percentage (%)",
+    y = "Performance Metric",
+    color = "Metric"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 10),
+    legend.position = "bottom"
+  ) +
+  scale_x_continuous(breaks = unique(plot_data$mislabeling_percentage))+
+  scale_y_continuous(limits = c(0, 1)) +
+  scale_color_manual(values = my_colors)
+
+print(p)
+```
+

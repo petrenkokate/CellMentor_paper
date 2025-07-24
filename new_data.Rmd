@@ -1,0 +1,731 @@
+---
+title: "new data"
+author: "Kate Petrenko"
+date: "2025-07-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library("scater")
+library("VariantAnnotation")
+library("ggplot2")
+library(Seurat)
+library(cowplot)
+library(dplyr)
+library(CellMentor)
+library(qs)
+library(dittoSeq)
+# install.packages('profvis')
+library(profvis)
+library(devtools)
+# install_github('linxihui/NNLM')
+library(NNLM)
+# devtools::install_github("gdurif/pCMF", subdir="pkg", ref="prod")
+library(pCMF)
+# install.packages("glmpca")
+library(glmpca)
+library(mclust)
+library(cluster)
+library(aricode)
+# install_github("ramhiser/clusteval")
+# library(clusteval)
+# install.packages('clevr')
+library(clevr)
+library(tictoc)
+library(ExperimentHub)
+library(SingleCellExperiment)
+library(TabulaMurisData)
+```
+
+```{r include=FALSE}
+my_colors <- c("#6495EDFF", "#FF69B4FF", "#BA55D3FF",  "#F08080FF", 
+               "#9ACD32FF", "#4682B4FF",  "#DDA0DDFF", "#FFA07AFF", "#8FBC8BFF",
+               "#40E0D0FF",  "#F0E68CFF", "#5F9EA0FF", "#D2B48CFF",  
+               "#32CD32FF",  
+               "#FFDAB9FF",  "#87CEEBFF")
+set.seed(100)
+```
+
+# SmartSeq - 10x
+
+```{r include=FALSE}
+eh <- ExperimentHub()
+query(eh, "TabulaMurisData")
+
+droplet <- TabulaMurisDroplet()
+smartseq <- TabulaMurisSmartSeq2()
+```
+
+```{r eval=FALSE, include=FALSE}
+droplet@colData$tissue %>% unique() %>% sort()
+```
+
+```{r eval=FALSE, include=FALSE}
+smartseq@colData$tissue %>% unique() %>% sort()
+```
+```{r eval=FALSE, include=FALSE}
+intersect(droplet@colData$tissue %>% unique(), smartseq@colData$tissue %>% unique())
+```
+
+
+```{r include=FALSE}
+# Subset the object to Lung tissue only
+lung_smartseq <- smartseq[, smartseq@colData$tissue == "Lung" & !is.na(smartseq@colData$cell_ontology_class)]
+
+# Extract the expression matrix
+lung_matrix_test <- assay(lung_smartseq)
+
+# Subset the object to Lung tissue only
+lung_10x <- droplet[, droplet@colData$tissue == "Lung" & !is.na(droplet@colData$cell_ontology_class)]
+
+# Extract the expression matrix
+lung_matrix_ref <- assay(lung_10x)
+
+
+```
+
+```{r include=FALSE}
+# object = CreateCSFNMFobject(lung_matrix_ref, lung_10x@colData$cell_ontology_class, lung_matrix_test)
+
+file_path <- paste0('save_data_v3/simulation_method', '_10x_smartseq', '.qs')
+# Check if file exists
+if (file.exists(file_path)) {
+  print("BEST METHOD ALREADY EXISTS. LOADING FILE...")
+  optimal_params_meth <- qread(file_path)
+} else {
+  print("SELECT BEST METHOD")
+  optimal_params_meth <- CellMentor(object, num_cores = 20, 
+                                    alpha_range = c(1, 5, 10),
+                                    beta_range = c(1, 5, 10),
+                                    gamma_range = c(0.1, 1),
+                                    delta_range = c(0.1, 1),)
+  qsave(optimal_params_meth, file_path)
+}
+K_VALUE = optimal_params_meth$best_params$k
+final_model <- optimal_params_meth$best_model
+
+h_test <- project_data(
+  W = final_model@W,                    # Use learned W matrix
+  X = final_model@matrices@data,        # Query/test data matrix
+  seed = 1,
+  num_cores = 10,
+  chunk_size = NULL,
+  verbose = TRUE
+)
+```
+
+```{r include=FALSE}
+seu_test <- CreateSeuratObject(counts = lung_matrix_test, meta.data = as.data.frame(colData(lung_smartseq)))
+```
+
+```{r include=FALSE}
+seu_test$CellMentor <- CreateDimReducObject(
+  embeddings = t(as.matrix(h_test)),
+  key = paste0('CellMentor', "_"),
+  assay = DefaultAssay(seu_test), 
+  loadings = as.matrix(final_model@W)
+) 
+
+seu_test <- seu_test %>% 
+  RunUMAP(reduction = 'CellMentor', dims= 1:K_VALUE, reduction.name = 'umap_cellmentor', verbose = F) %>% 
+  FindNeighbors(dims = 1:K_VALUE, reduction = 'CellMentor', verbose = F) %>% 
+  FindClusters(resolution = 0.2, verbose = F)
+
+seu_test$CellMentor_clusters <- seu_test$RNA_snn_res.0.2
+```
+
+```{r echo=FALSE, fig.height=5, fig.width=14}
+plot_grid(DimPlot(seu_test, reduction = 'umap_cellmentor', group.by = 'CellMentor_clusters', cols = my_colors) + ggtitle('CellMentor clusters'), 
+          DimPlot(seu_test, reduction = 'umap_cellmentor', group.by = 'cell_ontology_class', cols = my_colors) + ggtitle('Original cell types'),
+          rel_widths = c(1, 1.8), nrow = 1)
+```
+
+```{r echo=FALSE}
+library(aricode)
+
+# Extract cluster assignments and true labels
+clusters <- seu_test$CellMentor_clusters
+true_labels <- seu_test$cell_ontology_class
+
+# Remove NAs if any
+valid <- !is.na(clusters) & !is.na(true_labels)
+clusters <- clusters[valid]
+true_labels <- true_labels[valid]
+
+# Compute NMI and ARI
+nmi <- NMI(clusters, true_labels)
+ari <- ARI(clusters, true_labels)
+
+cat("NMI:", nmi, "\n")
+cat("ARI:", ari, "\n")
+```
+
+```{r include=FALSE}
+seu_test <- NormalizeData(seu_test) %>% 
+  FindVariableFeatures() %>% 
+  ScaleData() %>% 
+  RunPCA()
+
+seu_test <- RunUMAP(seu_test, dims = 1:10, reduction.name = 'umap_seuart',) %>% 
+  FindNeighbors(dims = 1:20) %>% 
+  FindClusters(resolution = 0.2)
+
+seu_test$Seurat_clusters <- seu_test$RNA_snn_res.0.2
+```
+
+```{r echo=FALSE, fig.height=5, fig.width=14}
+plot_grid(DimPlot(seu_test, group.by = 'Seurat_clusters', reduction = 'umap_seuart', cols = my_colors) + ggtitle('PCA (Seurat) clusters'), 
+          DimPlot(seu_test, group.by = 'cell_ontology_class', reduction = 'umap_seuart',cols = my_colors) + ggtitle('Original cell types'),
+          rel_widths = c(1, 1.8), nrow = 1)
+```
+
+```{r echo=FALSE}
+library(aricode)
+
+# Extract cluster assignments and true labels
+clusters <- seu_test$Seurat_clusters
+true_labels <- seu_test$cell_ontology_class
+
+# Remove NAs if any
+valid <- !is.na(clusters) & !is.na(true_labels)
+clusters <- clusters[valid]
+true_labels <- true_labels[valid]
+
+# Compute NMI and ARI
+nmi <- NMI(clusters, true_labels)
+ari <- ARI(clusters, true_labels)
+
+cat("NMI:", nmi, "\n")
+cat("ARI:", ari, "\n")
+```
+
+## all datasets 
+
+```{r}
+calculate_dataset_metrics <- function(seu_obj) {
+  seurat_clusters <- seu_obj$Seurat_clusters
+  cellmentor_clusters <- seu_obj$CellMentor_clusters
+  rssNMF_clusters <- seu_obj$rssNMF_clusters
+  LIGER_clusters <- seu_obj$LIGER_clusters
+  cassl_clusters <- seu_obj$cassl_clusters
+  scCoGAPS_clusters <- seu_obj$scCoGAPS_clusters
+  # harmony_clusters <- seu_obj$harmony_clusters
+  ica_clusters <- seu_obj$ICA_clusters
+  nmf_clusters <- seu_obj$NMF_clusters
+  pcmf_clusters <- seu_obj$pCMF_clusters
+  gbm_clusters <- seu_obj$GBM_clusters
+  scanvi_clusters <- seu_obj$scanvi_clusters
+  true_labels <- seu_obj$celltype
+  
+  # Return metrics list
+  list(
+    ARI = c(
+      'PCA (Seurat)' = adjustedRandIndex(seurat_clusters, true_labels),
+      # Harmony = adjustedRandIndex(harmony_clusters, true_labels),
+      ICA = adjustedRandIndex(ica_clusters, true_labels),
+      NMF = adjustedRandIndex(nmf_clusters, true_labels),
+      pCMF = adjustedRandIndex(pcmf_clusters, true_labels),
+      'GLM-PCA' = adjustedRandIndex(gbm_clusters, true_labels),
+      SCANVI = adjustedRandIndex(scanvi_clusters, true_labels),
+      rssNMF = adjustedRandIndex(rssNMF_clusters, true_labels),
+      LIGER = adjustedRandIndex(LIGER_clusters, true_labels),
+      CASSL = adjustedRandIndex(cassl_clusters, true_labels),
+      scCoGAPS = adjustedRandIndex(scCoGAPS_clusters, true_labels),
+      CellMentor = adjustedRandIndex(cellmentor_clusters, true_labels)
+    ),
+    NMI = c(
+      'PCA (Seurat)' = NMI(seurat_clusters, true_labels),
+      # Harmony = NMI(harmony_clusters, true_labels),
+      ICA = NMI(ica_clusters, true_labels),
+      NMF = NMI(nmf_clusters, true_labels),
+      pCMF = NMI(pcmf_clusters, true_labels),
+      'GLM-PCA' = NMI(gbm_clusters, true_labels),
+      SCANVI = NMI(scanvi_clusters, true_labels),
+      rssNMF = NMI(rssNMF_clusters, true_labels),
+      LIGER = NMI(LIGER_clusters, true_labels),
+      CASSL = NMI(cassl_clusters, true_labels),
+      scCoGAPS = NMI(scCoGAPS_clusters, true_labels),
+      CellMentor = NMI(cellmentor_clusters, true_labels)
+    )
+  )
+}
+```
+
+```{r}
+calculate_all_metrics <- function(simulations, fun = calculate_dataset_metrics) {
+  all_results <- list()
+  
+  for(i in seq_along(simulations)) {
+    sim <- simulations[[i]]
+    metrics <- fun(sim)
+    
+    # Add metadata
+    result <- list(
+      ARI = metrics$ARI,
+      NMI = metrics$NMI
+    )
+    
+    all_results[[i]] <- result
+  }
+  
+  return(all_results)
+}
+```
+
+```{r}
+# Get all .qs files matching the pattern
+file_pattern <- "save_data_v3/seu_test_*.qs"
+files <- list.files(path = "save_data_v3", pattern = "seu_test_.*\\.qs$", full.names = TRUE)
+
+# Extract tissue names from filenames for naming the list
+tissue_names <- gsub(".*seu_test_(.+)\\.qs$", "\\1", basename(files))
+
+# Read all objects into a named list
+seu_objects <- setNames(
+  lapply(files, function(file) {
+    cat("Reading:", basename(file), "\n")
+    qread(file)
+  }),
+  tissue_names
+)
+seu_objects$Thymus <- NULL
+
+# Get all .qs files matching the pattern
+file_pattern <- "save_data_v3/seu_ref_*.qs"
+files <- list.files(path = "save_data_v3", pattern = "seu_ref_.*\\.qs$", full.names = TRUE)
+
+# Extract tissue names from filenames for naming the list
+tissue_names <- gsub(".*seu_ref_(.+)\\.qs$", "\\1", basename(files))
+
+# Read all objects into a named list
+seu_refs <- setNames(
+  lapply(files, function(file) {
+    cat("Reading:", basename(file), "\n")
+    qread(file)
+  }),
+  tissue_names
+)
+seu_refs$Thymus <- NULL
+```
+
+```{r echo=FALSE}
+seu_objects$Mammary_Gland <- seu_objects$Mammary_Gland %>% 
+  FindNeighbors(dims = 1:dim(seu_objects$Mammary_Gland@reductions$CellMentor)[2], reduction = 'CellMentor', verbose = F) %>% 
+  FindClusters(resolution = 0.02, verbose = F)
+
+seu_objects$Mammary_Gland$CellMentor_clusters <- seu_objects$Mammary_Gland$RNA_snn_res.0.02
+
+DimPlot(seu_objects$Mammary_Gland, group.by = 'celltype', reduction = 'umap_cellmentor')
+DimPlot(seu_objects$Mammary_Gland, group.by = 'CellMentor_clusters', reduction = 'umap_cellmentor')
+# DimPlot(baron, group.by = 'celltype')
+```
+
+```{r echo=FALSE}
+seu_objects$Kidney <- seu_objects$Kidney %>% 
+  FindNeighbors(dims = 1:dim(seu_objects$Kidney@reductions$CellMentor)[2], reduction = 'CellMentor', verbose = F) %>% 
+  FindClusters(resolution = 0.05, verbose = F)
+
+seu_objects$Kidney$CellMentor_clusters <- seu_objects$Kidney$RNA_snn_res.0.05
+
+DimPlot(seu_objects$Kidney, group.by = 'celltype', reduction = 'umap_cellmentor')
+DimPlot(seu_objects$Kidney, group.by = 'CellMentor_clusters', reduction = 'umap_cellmentor')
+# DimPlot(baron, group.by = 'celltype')
+
+adjustedRandIndex(seu_objects$Kidney$CellMentor_clusters, seu_objects$Kidney$celltype)
+```
+```{r echo=FALSE}
+seu_objects$Liver <- seu_objects$Liver %>% 
+  FindNeighbors(dims = 1:dim(seu_objects$Liver@reductions$CellMentor)[2], reduction = 'CellMentor', verbose = F) %>% 
+  FindClusters(resolution = 0.05, verbose = F)
+
+seu_objects$Liver$CellMentor_clusters <- seu_objects$Liver$RNA_snn_res.0.05
+
+DimPlot(seu_objects$Liver, group.by = 'celltype', reduction = 'umap_cellmentor')
+DimPlot(seu_objects$Liver, group.by = 'CellMentor_clusters', reduction = 'umap_cellmentor')
+# DimPlot(baron, group.by = 'celltype')
+
+adjustedRandIndex(seu_objects$Liver$CellMentor_clusters, seu_objects$Liver$celltype)
+```
+```{r echo=FALSE}
+seu_objects$Marrow <- seu_objects$Marrow %>% 
+  FindNeighbors(dims = 1:dim(seu_objects$Marrow@reductions$CellMentor)[2], reduction = 'CellMentor', verbose = F) %>% 
+  FindClusters(resolution = 0.59, verbose = F)
+
+seu_objects$Marrow$CellMentor_clusters <- seu_objects$Marrow$RNA_snn_res.0.59
+
+DimPlot(seu_objects$Marrow, group.by = 'celltype', reduction = 'umap_cellmentor')
+DimPlot(seu_objects$Marrow, group.by = 'CellMentor_clusters', reduction = 'umap_cellmentor')
+# DimPlot(baron, group.by = 'celltype')
+
+adjustedRandIndex(seu_objects$Marrow$CellMentor_clusters, seu_objects$Marrow$celltype)
+```
+
+```{r}
+all_results <- calculate_all_metrics(seu_objects)
+
+# Create matrices for each metric
+metrics <- c("ARI", "NMI")
+methods <- all_results[[1]]$ARI %>% names()
+datasets <- names(seu_objects)
+
+create_metric_matrix <- function(metric_name) {
+  matrix(
+    sapply(all_results, function(x) x[[metric_name]]),
+    nrow = length(methods),
+    ncol = length(datasets),
+    dimnames = list(methods, datasets)
+  )
+}
+```
+
+```{r}
+my_colors <- viridis::viridis(100)
+plot_list <- lapply(seq_along(metrics[1:2]), function(i) {
+  mat <- create_metric_matrix(metrics[i])
+  
+  # Calculate row means for sorting
+  row_means <- rowMeans(mat)
+  
+  # Sort rows by mean (descending order - best performing methods first)
+  row_order <- order(row_means, decreasing = TRUE)
+  mat_sorted_rows <- mat[row_order, , drop = FALSE]
+  
+  cellmentor_values <- mat_sorted_rows["CellMentor",]
+  col_order <- order(cellmentor_values, decreasing = TRUE)
+  mat_sorted <- mat_sorted_rows[, col_order, drop = FALSE]
+  
+  # Calculate means for the sorted matrix
+  means <- rowMeans(mat_sorted)
+  
+  # Add mean column at the end
+  mat_with_stats <- cbind(mat_sorted, 
+                         Mean = means)
+  
+  ph <- pheatmap(mat_with_stats,
+                 main = metrics[i],
+                 cluster_rows = FALSE,
+                 cluster_cols = FALSE,
+                 display_numbers = TRUE,
+                 number_format = "%.3f",
+                 fontsize_number = 8,
+                 breaks = seq(0, 1, length.out = 101),
+                 color = my_colors,
+                 legend = FALSE)
+  
+  # Convert pheatmap output to grob
+  grid::grid.grabExpr(print(ph))
+})
+```
+
+```{r echo=FALSE, fig.height=4, fig.width=10}
+# Combine heatmaps into one figure with custom widths
+grid.arrange(grobs = plot_list, ncol = 2)
+```
+
+```{r}
+plot_line_charts_with_errors <- function(summary_stats, 
+                                        metrics_to_plot = c("ARI", "NMI"),
+                                        title_suffix = " Scores for simulations \nwithout batch effect") {
+  
+  # Define method colors (you can customize these)
+  methods <- sort(unique(summary_stats$summary$method))
+  methods_all <- c("CASSL", "CellMentor", "GLM-PCA", "Harmony", "ICA", "LIGER", "NMF",
+                   "PCA (Seurat)", "pCMF", "rssNMF", "SCANVI", "scCoGAPS")
+  cbPalette <- c(
+    "#999999", "#E69F00", "#56B4E9", "#009E73", 
+    "#F0E442", "#0072B2", "#D55E00", "#CC79A7", 
+    "#000000", "#FF69B4", "#32CD32", "#8B4513",  # SaddleBrown
+    "#00CED1",  # DarkTurquoise
+    "#FFD700",  # Gold
+    "#DC143C",  # Crimson
+    "#8A2BE2",  # BlueViolet
+    "#1E90FF",  # DodgerBlue
+    "#FF8C00",  # DarkOrange
+    "#2E8B57",  # SeaGreen
+    "#BA55D3"   # MediumOrchid
+  )
+  
+  method_colors <- setNames(cbPalette[1:length(methods_all)], methods_all)
+  
+  plot_list <- list()
+  
+  for(metric_name in metrics_to_plot) {
+    # Filter data for this metric
+    metric_data <- summary_stats$summary %>%
+      dplyr::filter(metric == metric_name) %>%
+      mutate(Difficulty = factor(param_set, levels = 1:10))
+    
+    # Create the plot
+    p <- ggplot(metric_data, aes(x = Difficulty, y = mean_score, 
+                                color = method, group = method)) +
+      geom_line(linewidth = 1) +
+      geom_point(size = 3) +
+      geom_errorbar(aes(ymin = mean_score - se_score, 
+                       ymax = mean_score + se_score),
+                   width = 0.2, linewidth = 0.8) +
+      labs(
+        title = paste0(metric_name, title_suffix),
+        x = "Level of Difficulty (1=Easiest, 10=Hardest)",
+        y = paste0(metric_name, " Score (Mean ± SE)"),
+        color = "Method"
+      ) +
+      scale_color_manual(values = method_colors) +
+      scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
+      theme_minimal() +
+      theme(
+        panel.grid.minor = element_blank(),
+        legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5, face = "bold"),
+        legend.title = element_text(face = "bold")
+      ) +
+      guides(color = guide_legend(nrow = 2, byrow = TRUE))
+    
+    plot_list[[metric_name]] <- p
+  }
+  
+  # Create combined plot if multiple metrics
+  if(length(plot_list) > 1) {
+    combined_plot <- plot_list[[1]] | plot_list[[2]] + 
+      plot_layout(guides = "collect") & 
+      theme(legend.position = "bottom")
+    
+    return(list(
+      plots = plot_list,
+      combined = combined_plot
+    ))
+  } else {
+    return(list(
+      plots = plot_list,
+      combined = plot_list[[1]]
+    ))
+  }
+}
+```
+
+```{r fig.height=5, fig.width=7}
+library(tidyverse)
+
+# Create matrices for each metric
+# metrics <- c("ARI", "NMI")
+metrics <- c("ARI")
+methods <- names(all_results[[1]]$ARI)
+datasets <- paste0("Dataset ", seq_along(all_results))
+
+methods_all <- c("CASSL", "CellMentor", "GLM-PCA", "Harmony", "ICA", "LIGER", "NMF",
+                 "PCA (Seurat)", "pCMF", "rssNMF", "SCANVI", "scCoGAPS")
+cbPalette <- c(
+  "#999999", "#E69F00", "#56B4E9", "#009E73", 
+  "#F0E442", "#0072B2", "#D55E00", "#CC79A7", 
+  "#000000", "#FF69B4", "#32CD32", "#8B4513",  # SaddleBrown
+  "#00CED1",  # DarkTurquoise
+  "#FFD700",  # Gold
+  "#DC143C",  # Crimson
+  "#8A2BE2",  # BlueViolet
+  "#1E90FF",  # DodgerBlue
+  "#FF8C00",  # DarkOrange
+  "#2E8B57",  # SeaGreen
+  "#BA55D3"   # MediumOrchid
+)
+
+method_colors <- setNames(cbPalette[1:length(methods_all)], methods_all)
+# Convert to long format dataframe for plotting
+datasets <- names(seu_objects)
+metric_long_df <- lapply(metrics, function(metric_name) {
+  mat <- sapply(all_results, function(x) x[[metric_name]])
+  df <- as.data.frame(mat)
+  colnames(df) <- datasets
+  df$Method <- rownames(df)
+  df_long <- pivot_longer(df, cols = -Method, names_to = "Dataset", values_to = "Score")
+  df_long$Metric <- metric_name
+  df_long
+}) %>% bind_rows()
+
+
+metric_long_df <- metric_long_df %>%
+  dplyr::filter(Metric == 'ARI') %>% 
+  mutate(
+    Dataset = factor(
+      Dataset,
+      levels = {
+        metric_data <- filter(cur_data(), Method == "CellMentor")
+        metric_data <- arrange(metric_data, desc(Score))
+        metric_data$Dataset
+      }
+    )
+  )
+# Plot
+ggplot(metric_long_df, aes(x = Dataset, y = Score, color = Method, group = Method)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  # facet_wrap(~ Metric, ncol = 1, scales = "free_y") +
+  theme_minimal() +
+  labs(
+    title = "Metric Scores Across Datasets",
+    x = "Dataset",
+    y = "Score",
+    color = "Method"
+  ) +
+  scale_color_manual(values = method_colors) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "right",
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  ) +
+  guides(color = guide_legend(nrow = 11, byrow = TRUE))
+```
+
+```{r}
+generate_umap_plot <- function(pbmc, umap_reduction, cluster_column, title) {
+  
+  if (cluster_column == "Batch") {
+    umap <- pbmc@reductions[[umap_reduction]]@cell.embeddings
+    dt <- data.table(
+      umap,
+      cluster = as.vector(pbmc[[cluster_column]])[[1]],
+      annotation = pbmc$Batch
+    )
+    colnames(dt) <- c('umap_1', 'umap_2', 'cluster', 'annotation')
+    # Create ggplot
+    ggplot(dt, aes(x = umap_1, y = umap_2)) +
+      geom_point(aes(color = annotation), size = 0.5) +
+      scale_color_manual(values = c('#73d2de', '#d81159')) +
+      theme_classic() +
+      ggtitle(title) +
+      NoLegend() +
+      labs(x = NULL, y = NULL)
+  }
+  else {
+  # Create a data.table for the specific UMAP and clustering
+  umap <- pbmc@reductions[[umap_reduction]]@cell.embeddings
+  dt <- data.table(
+    umap,
+    cluster = as.vector(pbmc[[cluster_column]])[[1]],
+    annotation = pbmc$celltype
+  )
+  colnames(dt) <- c('umap_1', 'umap_2', 'cluster', 'annotation')
+  # Generate mask table for the clusters
+  maskTable <- generateMask(
+    dims = pbmc@reductions[[umap_reduction]]@cell.embeddings,
+    clusters = as.vector(pbmc[[cluster_column]])[[1]]
+  )
+  colnames(maskTable) <- c("umap_1", "umap_2", "part", "group", "cluster")
+  # Create ggplot
+  ggplot(dt, aes(x = umap_1, y = umap_2)) +
+    geom_point(aes(color = annotation), size = 0.5) +
+    geom_path(data = maskTable, aes(group = group)) +
+    # coord_fixed() +
+    scale_color_manual(values = my_colors) +
+    theme_classic() +
+    ggtitle(title) +
+    # NoLegend() +
+    labs(x = NULL, y = NULL)+
+    theme(
+      # legend.key.size = unit(2, "cm"),
+    legend.text = element_text(size = 14),        # Increase legend labels
+    legend.title = element_text(size = 14),       # Optional: increase legend title
+    plot.title = element_text(hjust = 0.5)        # Center title if you like
+  ) +
+    guides(color = guide_legend(override.aes = list(size = 3)))
+  }
+}
+```
+
+```{r}
+seu_refs <- lapply(names(seu_refs)[1:9], function(obj_name) {
+  file_path <- paste0("save_data_v3/simulation_method_", obj_name, "_10x_smartseq.qs")
+  method_data <- qread(file_path)
+  final_model <- method_data$best_model
+  K_VALUE = method_data$best_params$k
+  sim_ref <- seu_refs[[obj_name]]
+  sim_ref$CellMentor <- CreateDimReducObject(
+      embeddings = t(as.matrix(method_data$best_model@H)),
+      key = paste0('CellMentor', "_"),
+      assay = DefaultAssay(sim_ref),
+      loadings = as.matrix(final_model@W)
+    )
+  sim_ref <- sim_ref %>%
+      RunUMAP(reduction = 'CellMentor', dims= 1:K_VALUE, reduction.name = 'umap_cellmentor', verbose = F) %>% 
+    FindNeighbors(dims = 1:K_VALUE, reduction = 'CellMentor', verbose = F) %>%
+      FindClusters(resolution = 0.1, verbose = F)
+
+  sim_ref$CellMentor_clusters <- sim_ref$RNA_snn_res.0.1
+  return(sim_ref)
+})
+names(seu_refs) <- names(seu_objects)[1:9]
+qsave(seu_refs, 'save_data_v3/seu_refs_tabula.qs')
+```
+
+```{r fig.height=4, fig.width=14}
+library(Seurat)
+library(cowplot)
+library(ggplot2)
+
+my_colors <- c("#6495EDFF", "#FF69B4FF", "#BA55D3FF",  "#F08080FF", 
+               "#9ACD32FF", "#4682B4FF",  "#DDA0DDFF", "#FFA07AFF", "#8FBC8BFF",
+               "#40E0D0FF",  "#F0E68CFF", "#5F9EA0FF", "#D2B48CFF",  
+               "#32CD32FF",  
+               "#FFDAB9FF",  "#87CEEBFF", "#999999", "#E69F00", "#56B4E9", "#009E73", 
+  "#F0E442", "#0072B2", "#D55E00", "#CC79A7", 
+  "#000000", "#FF69B4", "#32CD32", "#8B4513",  # SaddleBrown
+  "#00CED1",  # DarkTurquoise
+  "#FFD700",  # Gold
+  "#DC143C",  # Crimson
+  "#8A2BE2",  # BlueViolet
+  "#1E90FF",  # DodgerBlue
+  "#FF8C00",  # DarkOrange
+  "#2E8B57",  # SeaGreen
+  "#BA55D3" )
+
+# Create plots for each object in the list
+all_umap_plots <- lapply(names(seu_objects)[1:9], function(obj_name) {
+  sim_ref <- seu_refs[[obj_name]]
+  sim_test <- seu_objects[[obj_name]]
+
+  p1 <- generate_umap_plot(sim_ref, 'umap_cellmentor', "CellMentor_clusters", 'Ref') 
+
+  p2 <- generate_umap_plot(sim_test, 'umap_cellmentor', "CellMentor_clusters", 'Test')
+
+  arranged_plot <- plot_grid(p1, p2, rel_widths = c(1, 1), nrow = 1)
+
+  # Optionally: add a title
+  arranged_plot <- plot_grid(
+    ggdraw() + draw_label(obj_name, fontface = 'bold', size = 14, hjust = 0),
+    arranged_plot,
+    ncol = 1,
+    rel_heights = c(0.1, 1)
+  )
+
+  return(arranged_plot)
+})
+```
+
+```{r fig.height=20, fig.width=13}
+combined_plot <- plot_grid(plotlist = all_umap_plots[c(1, 3, 4, 8, 9)], ncol = 1, nrow = 5)
+```
+
+```{r fig.height=15, fig.width=16}
+combined_plot <- plot_grid(plotlist = all_umap_plots[c(7)], ncol = 1, nrow = 1)
+```
+
+```{r fig.height=5, fig.width=20}
+p1 <- generate_umap_plot(seu_refs[[7]], 'umap_cellmentor', "CellMentor_clusters", 'Ref') 
+
+  p2 <- generate_umap_plot(seu_objects[[7]], 'umap_cellmentor', "CellMentor_clusters", 'Test')
+
+  arranged_plot <- plot_grid(p1, p2, rel_widths = c(1, 2), nrow = 1)
+
+  # Optionally: add a title
+  arranged_plot <- plot_grid(
+    ggdraw() + draw_label('Marrow', fontface = 'bold', size = 14, hjust = 0),
+    arranged_plot,
+    ncol = 1,
+    rel_heights = c(0.1, 1)
+  )
+```
+
+```{r}
+DimPlot(seu_objects[['Mammary_Gland']], reduction = 'umap_cellmentor', group.by = 'celltype')
+```
+
+

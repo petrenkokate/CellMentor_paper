@@ -1,0 +1,265 @@
+---
+title: "comp_cost"
+author: "Kate Petrenko"
+date: "2025-07-09"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(splatter)
+library("scater")
+library("VariantAnnotation")
+library("ggplot2")
+library(Seurat)
+library(cowplot)
+library(dplyr)
+library(CellMentor)
+library(qs)
+library(dittoSeq)
+library(profvis)
+library(devtools)
+library(NNLM)
+library(pCMF)
+library(glmpca)
+library(mclust)
+library(cluster)
+library(aricode)
+library(clevr)
+library(SingleR)
+library(reticulate)
+library(sceasy)
+library(harmony)
+# library(spam)
+# library(spam64)
+library(fastICA)
+library(rliger)
+library(CoGAPS)
+library(projectR)
+```
+
+# data
+
+```{r}
+small <- list()
+small[[1]] <- qread('save_data_v3/computational_analysis_ALL_METHODS_small_20250707_0654.qs')
+small[[2]] <- qread('save_data_v3/computational_analysis_ALL_METHODS_small_20250707_1947.qs')
+small[[3]] <- qread('save_data_v3/computational_analysis_ALL_METHODS_small_20250707_1948.qs')
+
+medium <- list()
+medium[[1]] <- qread('save_data_v3/computational_analysis_ALL_METHODS_medium_20250707_0756.qs')
+medium[[2]] <- qread('save_data_v3/computational_analysis_ALL_METHODS_medium_20250707_2051.qs')
+medium[[3]] <- qread('save_data_v3/computational_analysis_ALL_METHODS_medium_20250707_2053.qs')
+
+large <- list()
+large[[1]] <- qread('save_data_v3/computational_analysis_ALL_METHODS_large_20250707_1226.qs')
+large[[2]] <- qread('save_data_v3/computational_analysis_ALL_METHODS_large_20250708_0120.qs')
+large[[3]] <- qread('save_data_v3/computational_analysis_ALL_METHODS_large_20250708_0138.qs')
+```
+
+```{r}
+extract_data <- function(data_list, dataset_name) {
+  results_df <- data.frame()
+  
+  for (i in 1:length(data_list)) {
+    for (method in names(data_list[[i]]$method_results)) {
+      method_data <- data_list[[i]]$method_results[[method]]
+      if (method_data$success) {
+        results_df <- rbind(results_df, data.frame(
+          dataset = dataset_name,
+          replicate = i,
+          method = method,
+          n_cells = data_list[[i]]$dataset_info$n_test_cells,
+          wall_time_minutes = method_data$time_minutes,
+          cpu_time_minutes = method_data$cpu_total_time_minutes,
+          cpu_efficiency = method_data$cpu_efficiency,
+          memory_mb = method_data$memory_mb,
+          peak_memory_mb = method_data$peak_memory_mb
+        ))
+      }
+    }
+  }
+  return(results_df)
+}
+```
+
+```{r}
+# Extract data from all datasets
+small_df <- extract_data(small, "Small (500 cells)")
+medium_df <- extract_data(medium, "Medium (2000 cells)")
+large_df <- extract_data(large, "Large (5000 cells)")
+
+# Combine all data
+all_data <- rbind(small_df, medium_df, large_df)
+
+# Calculate summary statistics
+summary_stats <- all_data %>%
+  group_by(dataset, method) %>%
+  summarise(
+    n_cells = dplyr::first(n_cells),
+    mean_wall_time = mean(wall_time_minutes),
+    sd_wall_time = sd(wall_time_minutes),
+    se_wall_time = sd_wall_time / sqrt(n()),
+    mean_cpu_time = mean(cpu_time_minutes),
+    sd_cpu_time = sd(cpu_time_minutes),
+    se_cpu_time = sd_cpu_time / sqrt(n()),
+    mean_cpu_efficiency = mean(cpu_efficiency),
+    sd_cpu_efficiency = sd(cpu_efficiency),
+    mean_memory = mean(memory_mb),
+    sd_memory = sd(memory_mb),
+    se_memory = sd_memory / sqrt(n()),
+    .groups = 'drop'
+  )
+```
+
+```{r}
+# 1. Wall Clock Time Comparison
+p1 <- ggplot(summary_stats, aes(x = reorder(method, mean_wall_time), y = mean_wall_time, fill = dataset)) +
+  geom_col(position = "dodge") +
+  geom_errorbar(aes(ymin = mean_wall_time - se_wall_time, 
+                    ymax = mean_wall_time + se_wall_time),
+                position = position_dodge(width = 0.9), width = 0.25) +
+  scale_y_log10() +
+  labs(title = "Wall Clock Time Comparison",
+       x = "Method", y = "Time (minutes, log scale)",
+       fill = "Dataset Size") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+print(p1)
+```
+
+```{r}
+# 2. CPU Time Comparison
+p2 <- ggplot(summary_stats, aes(x = reorder(method, mean_cpu_time), y = mean_cpu_time, fill = dataset)) +
+  geom_col(position = "dodge") +
+  geom_errorbar(aes(ymin = mean_cpu_time - se_cpu_time, 
+                    ymax = mean_cpu_time + se_cpu_time),
+                position = position_dodge(width = 0.9), width = 0.25) +
+  scale_y_log10() +
+  labs(title = "CPU Time Comparison",
+       x = "Method", y = "CPU Time (minutes, log scale)",
+       fill = "Dataset Size") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+print(p2)
+```
+
+```{r}
+# 3. Memory Usage Comparison
+p3 <- ggplot(summary_stats, aes(x = reorder(method, mean_memory), y = mean_memory, fill = dataset)) +
+  geom_col(position = "dodge") +
+  geom_errorbar(aes(ymin = mean_memory - se_memory, 
+                    ymax = mean_memory + se_memory),
+                position = position_dodge(width = 0.9), width = 0.25) +
+  scale_y_log10() +
+  labs(title = "Memory Usage Comparison",
+       x = "Method", y = "Memory Usage (MB, log scale)",
+       fill = "Dataset Size") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+print(p3)
+```
+
+```{r}
+# 4. CPU Efficiency
+p4 <- ggplot(summary_stats, aes(x = reorder(method, mean_cpu_efficiency), y = mean_cpu_efficiency, fill = dataset)) +
+  geom_col(position = "dodge") +
+  geom_errorbar(aes(ymin = mean_cpu_efficiency - sd_cpu_efficiency, 
+                    ymax = mean_cpu_efficiency + sd_cpu_efficiency),
+                position = position_dodge(width = 0.9), width = 0.25) +
+  labs(title = "CPU Efficiency (CPU Time / Wall Clock Time)",
+       x = "Method", y = "CPU Efficiency Ratio",
+       fill = "Dataset Size",
+       subtitle = "Higher values = better CPU utilization") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+print(p4)
+```
+
+```{r eval=FALSE, include=FALSE}
+# 5. Performance Rankings Table
+rankings <- summary_stats %>%
+  filter(dataset == "Large (5000 cells)") %>%
+  mutate(
+    wall_time_rank = rank(mean_wall_time),
+    cpu_time_rank = rank(mean_cpu_time),
+    memory_rank = rank(mean_memory),
+    efficiency_rank = rank(-mean_cpu_efficiency)
+  ) %>%
+  dplyr::select(method, wall_time_rank, cpu_time_rank, memory_rank, efficiency_rank, 
+         mean_wall_time, mean_cpu_time, mean_memory, mean_cpu_efficiency) %>%
+  arrange(wall_time_rank)
+
+print("Performance Rankings (Large Dataset):")
+print(rankings)
+```
+
+```{r}
+# 6. Statistical Significance Testing (t-tests comparing CellMentor vs others)
+cellmentor_vs_others <- function(metric_name) {
+  cellmentor_data <- all_data %>% filter(method == "CellMentor", dataset == "Large (5000 cells)")
+  
+  results <- data.frame()
+  for (other_method in unique(all_data$method)) {
+    if (other_method != "CellMentor") {
+      other_data <- all_data %>% filter(method == other_method, dataset == "Large (5000 cells)")
+      if (nrow(other_data) > 0) {
+        t_test <- t.test(cellmentor_data[[metric_name]], other_data[[metric_name]])
+        results <- rbind(results, data.frame(
+          method = other_method,
+          cellmentor_mean = mean(cellmentor_data[[metric_name]]),
+          other_mean = mean(other_data[[metric_name]]),
+          p_value = t_test$p.value,
+          significant = t_test$p.value < 0.05
+        ))
+      }
+    }
+  }
+  return(results)
+}
+
+```
+
+```{r eval=FALSE, include=FALSE}
+# Statistical tests for large dataset
+print("\nStatistical Comparison (CellMentor vs Others - Large Dataset):")
+print("Wall Clock Time:")
+wall_time_tests <- cellmentor_vs_others("wall_time_minutes")
+print(wall_time_tests[order(wall_time_tests$p_value), ])
+
+print("\nCPU Time:")
+cpu_time_tests <- cellmentor_vs_others("cpu_time_minutes")
+print(cpu_time_tests[order(cpu_time_tests$p_value), ])
+
+print("\nMemory Usage:")
+memory_tests <- cellmentor_vs_others("memory_mb")
+print(memory_tests[order(memory_tests$p_value), ])
+```
+
+```{r}
+# 8. Scalability Analysis
+scalability_data <- summary_stats %>%
+  mutate(
+    cells_per_sec_wall = n_cells / (mean_wall_time * 60),
+    cells_per_sec_cpu = n_cells / (mean_cpu_time * 60),
+    memory_per_cell = mean_memory / n_cells
+  )
+
+p5 <- ggplot(scalability_data, aes(x = n_cells, y = cells_per_sec_wall, color = method)) +
+  geom_point(size = 3) +
+  geom_line() +
+  scale_x_log10() +
+  scale_y_log10() +
+  labs(title = "Processing Speed Scalability",
+       x = "Number of Cells (log scale)",
+       y = "Cells per Second (log scale)",
+       color = "Method") +
+  theme_minimal()
+
+print(p5)
+```
+

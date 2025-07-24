@@ -23,8 +23,10 @@ library(SingleR)
 library(reticulate)
 library(sceasy)
 library(harmony)
+library(spam)
+library(spam64)
 
-SUFFIX <- '_batch_'
+SUFFIX = '_wobatch_'
 
 source("~/nmf/paper_scripts/code/graph_rssNMF.R")
 source("~/nmf/paper_scripts/code/initial_NMF.R")
@@ -38,91 +40,28 @@ simulation_params <- list(
   list(
     nGenes = 15000, 
     seed = 100, 
-    batchCells = c(1000, 1000, 1000, 1000), 
-    batch.facLoc = 0.05,                    
-    batch.facScale = 0.1,
-    out.prob = 0.01,                    
-    group.prob = c(1/6, 1/6, 1/6, 1/6, 1/6, 1/6), 
-    de.prob = c(0.6, 0.6, 0.6, 0.6, 0.6, 0.6), 
-    de.downProb = c(0.2, 0.2, 0.2, 0.2, 0.2, 0.2), 
-    de.facLoc = c(1.2, 1.2, 1.2, 1.2, 1.2, 1.2), 
-    de.facScale = c(0.1, 0.1, 0.1, 0.1, 0.1, 0.1),
-    bcv.common = 0.2,                     
-    bcv.df = 15,                           
-    dropout.mid = c(0.5, 0.5, 0.5, 0.5),  
-    dropout.shape = c(-1.0, -1.0, -1.0, -1.0),
+    batchCells = c(1000, 1000),
+    batch.facLoc = 0.22,                    
+    batch.facScale = 0.32,                   
+    out.prob = 0.06,                         
+    group.prob = c(0.30, 0.25, 0.15, 0.15, 0.08, 0.07),  
+    de.prob = c(0.35, 0.30, 0.40, 0.30, 0.35, 0.30),     
+    de.downProb = c(0.40, 0.25, 0.45, 0.20, 0.40, 0.50), 
+    de.facLoc = c(0.7, 0.6, 0.8, 0.6, 0.7, 0.6),      
+    de.facScale = c(0.3, 0.35, 0.3, 0.35, 0.3, 0.35),    
+    bcv.common = 0.55,                     
+    bcv.df = 5,                           
+    dropout.mid = c(0.9, 1.1),     
+    dropout.shape = c(-1.0, -1.2),
     dropout.type = 'batch',
-    lib.loc = 15, 
-    lib.scale = 0.5                        
+    lib.loc = 14,                           
+    lib.scale = 1.1                      
   ),
   # Simulation 2
   list(
     nGenes = 15000, 
     seed = 100, 
-    batchCells = c(1000, 1000, 1000, 1000),
-    batch.facLoc = 0.05,
-    batch.facScale = 0.1,
-    out.prob = 0.01,
-    group.prob = c(0.30, 0.25, 0.20, 0.15, 0.05, 0.05), 
-    de.prob = c(0.6, 0.6, 0.6, 0.6, 0.6, 0.6),          
-    de.downProb = c(0.2, 0.2, 0.2, 0.2, 0.2, 0.2),
-    de.facLoc = c(1.2, 1.2, 1.2, 1.2, 1.2, 1.2),
-    de.facScale = c(0.1, 0.1, 0.1, 0.1, 0.1, 0.1),
-    bcv.common = 0.2,
-    bcv.df = 15,
-    dropout.mid = c(0.5, 0.5, 0.5, 0.5),
-    dropout.shape = c(-1.0, -1.0, -1.0, -1.0),
-    dropout.type = 'batch',
-    lib.loc = 15, 
-    lib.scale = 0.5
-  ),
-  # Simulation 3
-  list(
-    nGenes = 15000, 
-    seed = 100, 
-    batchCells = c(1000, 1000, 1000, 1000),
-    batch.facLoc = 0.15,
-    batch.facScale = 0.2,
-    out.prob = 0.02,
-    group.prob = c(0.30, 0.25, 0.20, 0.15, 0.05, 0.05),
-    de.prob = c(0.7, 0.6, 0.5, 0.4, 0.3, 0.2),
-    de.downProb = c(0.4, 0.3, 0.2, 0.3, 0.4, 0.5),
-    de.facLoc = c(1.4, 1.2, 1.0, 0.8, 0.6, 0.4),
-    de.facScale = c(0.1, 0.1, 0.1, 0.1, 0.1, 0.1),
-    bcv.common = 0.3,
-    bcv.df = 12,
-    dropout.mid = c(0.3, 0.6, 0.9, 1.2),
-    dropout.shape = c(-0.8, -1.0, -1.2, -1.4),
-    dropout.type = 'batch',
-    lib.loc = 15, 
-    lib.scale = 1.5                     
-  ),
-  # Simulation 4
-  list(
-    nGenes = 15000, 
-    seed = 100, 
-    batchCells = c(1000, 1000, 1000, 1000),
-    batch.facLoc = 0.2,
-    batch.facScale = 0.3,
-    out.prob = 0.05,                        
-    group.prob = c(0.35, 0.30, 0.20, 0.10, 0.03, 0.02), 
-    de.prob = c(0.4, 0.3, 0.5, 0.3, 0.2, 0.1),        
-    de.downProb = c(0.4, 0.2, 0.5, 0.3, 0.2, 0.6),     
-    de.facLoc = c(0.8, 0.6, 1.0, 0.7, 0.5, 0.4),        
-    de.facScale = c(0.3, 0.2, 0.3, 0.2, 0.4, 0.3),    
-    bcv.common = 0.5,
-    bcv.df = 6,                                         
-    dropout.mid = c(0.5, 0.8, 1.1, 1.4),                
-    dropout.shape = c(-0.7, -0.9, -1.1, -1.3),
-    dropout.type = 'batch',
-    lib.loc = 14,                                     
-    lib.scale = 1.8                                  
-  ),
-  # Simulation 5
-  list(
-    nGenes = 15000, 
-    seed = 100, 
-    batchCells = c(1000, 1000, 1000, 1000),
+    batchCells = c(1000, 1000),
     batch.facLoc = 0.2,
     batch.facScale = 0.3,
     out.prob = 0.01,
@@ -131,118 +70,181 @@ simulation_params <- list(
     de.downProb = c(0.2, 0.2, 0.2, 0.2, 0.2, 0.2),
     de.facLoc = c(1.0, 1.0, 1.0, 1.0, 1.0, 1.0),
     de.facScale = c(0.1, 0.1, 0.1, 0.1, 0.1, 0.1),
-    bcv.common = 0.5,                     
-    bcv.df = 8,                             
-    dropout.mid = c(0.5, 0.5, 0.5, 0.5),
-    dropout.shape = c(-1.0, -1.0, -1.0, -1.0),
+    bcv.common = 0.5,                       
+    bcv.df = 8,                            
+    dropout.mid = c(0.5, 0.5),
+    dropout.shape = c(-1.0, -1.0),
     dropout.type = 'batch',
     lib.loc = 15, 
     lib.scale = 0.8
   ),
-  # Simulation 6
+  # Simulation 3
   list(
-    nGenes = 15000, 
+    nGenes = 10000, 
     seed = 100, 
-    batchCells = c(1000, 1000, 1000, 1000),
-    batch.facLoc = 0.2,
-    batch.facScale = 0.3,
-    out.prob = 0.01,
-    group.prob = c(0.20, 0.20, 0.20, 0.20, 0.10, 0.10),
-    de.prob = c(0.4, 0.4, 0.4, 0.4, 0.4, 0.4),      
-    de.downProb = c(0.2, 0.2, 0.2, 0.2, 0.2, 0.2),
-    de.facLoc = c(0.7, 0.7, 0.7, 0.7, 0.7, 0.7),  
-    de.facScale = c(0.2, 0.2, 0.2, 0.2, 0.2, 0.2), 
-    bcv.common = 0.5,
-    bcv.df = 8,
-    dropout.mid = c(0.5, 0.5, 0.5, 0.5),
-    dropout.shape = c(-1.0, -1.0, -1.0, -1.0),
-    dropout.type = 'batch',
-    lib.loc = 15, 
-    lib.scale = 0.8
-  ),
-  # Simulation 7
-  list(
-    nGenes = 15000, 
-    seed = 100, 
-    batchCells = c(1000, 1000, 1000, 1000),
+    batchCells = c(1000, 1000),
     batch.facLoc = 0.2,
     batch.facScale = 0.4,
     out.prob = 0.1, 
     group.prob = c(0.18, 0.23, 0.12,0.07, 0.10, 0.3),
-    de.prob = c(0.35, 0.15, 0.45, 0.55, 0.25, 0.15),
+    de.prob = c(0.3, 0.1, 0.4, 0.5, 0.2, 0.1),
+    de.downProb = c(0.1, 0.4, 0.2, 0.2, 0.1, 0.6),
+    de.facLoc = c(0.6, 0.01, 0.5, 0.45, 0.4, 0.01),
+    de.facScale = c(0.1, 0.4, 0.2, 0.25, 0.2, 0.5),
+    bcv.common = 0.6,
+    bcv.df = 5,
+    dropout.mid = c(1, 3),
+    dropout.shape = c(-1.5, -2),
+    dropout.type = 'batch',
+    lib.loc = 15, 
+    lib.scale = 1.0
+  ),
+  # Simulation 4
+  list(
+    nGenes = 15000,
+    seed = 100, 
+    batchCells = c(1000, 1000),
+    batch.facLoc = 0.3,
+    batch.facScale = 0.5,
+    out.prob = 0.1,
+    group.prob = c(0.15, 0.25, 0.15, 0.05, 0.10, 0.3), 
+    de.prob = c(0.3, 0.1, 0.4, 0.5, 0.2, 0.1),
     de.downProb = c(0.1, 0.4, 0.2, 0.2, 0.1, 0.6),
     de.facLoc = c(0.6, 0.01, 0.5, 0.45, 0.4, 0.01),
     de.facScale = c(0.1, 0.4, 0.2, 0.25, 0.2, 0.5),
     bcv.common = 0.8,
     bcv.df = 5,
-    dropout.mid = c(1, 1, 3, 0.5),
-    dropout.shape = c(-1.5, -1.5, -1, -2),
+    dropout.mid = c(1, 3),
+    dropout.shape = c(-1.5, -1),
+    dropout.type = 'batch',
+    lib.loc = 15, 
+    lib.scale = 1.0
+  ),
+  # Simulation 5
+  list(
+    nGenes = 15000,
+    seed = 100, 
+    batchCells = c(1000, 1000),
+    batch.facLoc = 0.3,
+    batch.facScale = 0.5,
+    out.prob = 0.1,
+    group.prob = c(0.18, 0.23, 0.12, 0.07, 0.10, 0.3),
+    de.prob = c(0.35, 0.15, 0.45, 0.55, 0.25, 0.15), 
+    de.downProb = c(0.1, 0.4, 0.2, 0.2, 0.1, 0.6),
+    de.facLoc = c(0.6, 0.01, 0.5, 0.45, 0.4, 0.01),
+    de.facScale = c(0.1, 0.4, 0.2, 0.25, 0.2, 0.5),
+    bcv.common = 0.8,
+    bcv.df = 5,
+    dropout.mid = c(1, 3),
+    dropout.shape = c(-1.5, -1),
+    dropout.type = 'batch',
+    lib.loc = 15, 
+    lib.scale = 1.0
+  ),
+  # Simulation 6
+  list(
+    nGenes = 10000, 
+    seed = 100, 
+    batchCells = c(1000, 1000),
+    batch.facLoc = 0.3,
+    batch.facScale = 0.5,
+    out.prob = 0.1, 
+    group.prob = c(0.18, 0.23, 0.16,0.03, 0.10, 0.3),
+    de.prob = c(0.3, 0.1, 0.4, 0.5, 0.2, 0.1),
+    de.downProb = c(0.1, 0.4, 0.2, 0.2, 0.1, 0.6),
+    de.facLoc = c(0.6, 0.01, 0.5, 0.45, 0.4, 0.01),
+    de.facScale = c(0.2, 0.5, 0.3, 0.35, 0.3, 0.6),
+    bcv.common = 0.8,
+    bcv.df = 5,
+    dropout.mid = c(3, 5),
+    dropout.shape = c(-2.5, -2.5),
+    dropout.type = 'batch',
+    lib.loc = 15, 
+    lib.scale = 1.0
+  ),
+  # Simulation 7
+  list(
+    nGenes = 20000, 
+    seed = 100, 
+    batchCells = c(1000, 1000),
+    batch.facLoc = 0.3,
+    batch.facScale = 0.5,
+    out.prob = 0.1, 
+    group.prob = c(0.18, 0.23, 0.12,0.07, 0.10, 0.3),
+    de.prob = c(0.3, 0.1, 0.4, 0.5, 0.2, 0.1),
+    de.downProb = c(0.1, 0.4, 0.2, 0.2, 0.1, 0.6),
+    de.facLoc = c(0.6, 0.01, 0.5, 0.45, 0.4, 0.01),
+    de.facScale = c(0.2, 0.5, 0.3, 0.35, 0.3, 0.6),
+    bcv.common = 0.8,
+    bcv.df = 5,
+    dropout.mid = c(1, 3),
+    dropout.shape = c(-1.5, -1.5),
     dropout.type = 'batch',
     lib.loc = 15, 
     lib.scale = 1.0
   ),
   # Simulation 8
   list(
-    nGenes = 15000, 
+    nGenes = 15000,
     seed = 100, 
-    batchCells = c(1000, 1000, 1000, 1000),
-    batch.facLoc = 0.4,
+    batchCells = c(1000, 1000),
+    batch.facLoc = 0.3,
     batch.facScale = 0.5,
-    out.prob = 0.07,                           
-    group.prob = c(0.35, 0.25, 0.15, 0.10, 0.10, 0.05),
-    de.prob = c(0.3, 0.2, 0.4, 0.2, 0.3, 0.2), 
-    de.downProb = c(0.3, 0.2, 0.4, 0.1, 0.3, 0.5),
-    de.facLoc = c(0.5, 0.4, 0.6, 0.3, 0.5, 0.4),  
-    de.facScale = c(0.3, 0.4, 0.3, 0.4, 0.3, 0.4), 
-    bcv.common = 0.7,
-    bcv.df = 6,
-    dropout.mid = c(1.0, 1.5, 0.8, 1.2),
-    dropout.shape = c(-1.2, -1.3, -1.1, -1.4),
+    out.prob = 0.1,
+    group.prob = c(0.18, 0.23, 0.12, 0.07, 0.10, 0.3),
+    de.prob = c(0.2, 0.15, 0.35, 0.45, 0.15, 0.05),  
+    de.downProb = c(0.1, 0.4, 0.2, 0.2, 0.1, 0.6),
+    de.facLoc = c(0.6, 0.01, 0.5, 0.45, 0.4, 0.01),
+    de.facScale = c(0.1, 0.4, 0.2, 0.25, 0.2, 0.5),
+    bcv.common = 0.8,
+    bcv.df = 5,
+    dropout.mid = c(1, 3),
+    dropout.shape = c(-1.5, -1),
     dropout.type = 'batch',
-    lib.loc = 14,                              
-    lib.scale = 1.2                            
+    lib.loc = 15, 
+    lib.scale = 1.0
   ),
   # Simulation 9
   list(
-    nGenes = 10000, 
+    nGenes = 7500, 
     seed = 100, 
-    batchCells = c(1000, 1000, 1000, 1000),
-    batch.facLoc = 0.2,
-    batch.facScale = 0.4,
-    out.prob = 0.1, 
-    group.prob = c(0.18, 0.23, 0.12,0.07, 0.10, 0.3),
+    batchCells = c(1000, 1000),
+    batch.facLoc = 0.3,
+    batch.facScale = 0.5,
+    out.prob = 0.15, 
+    group.prob = c(0.18, 0.23, 0.16,0.03, 0.10, 0.3),
     de.prob = c(0.3, 0.1, 0.4, 0.5, 0.2, 0.1),
     de.downProb = c(0.1, 0.4, 0.2, 0.2, 0.1, 0.6),
     de.facLoc = c(0.6, 0.01, 0.5, 0.45, 0.4, 0.01),
-    de.facScale = c(0.1, 0.4, 0.2, 0.25, 0.2, 0.5),
-    bcv.common = 0.8,
-    bcv.df = 5,
-    dropout.mid = c(1, 1, 3, 0.5),
-    dropout.shape = c(-1.5, -1.5, -1, -2),
+    de.facScale = c(0.2, 0.5, 0.3, 0.35, 0.3, 0.6),
+    bcv.common = 1.2,
+    bcv.df = 3,
+    dropout.mid = c(3, 5),
+    dropout.shape = c(-2.5, -2.5),
     dropout.type = 'batch',
     lib.loc = 15, 
     lib.scale = 1.0
   ),
-  # Simulation 10
+  # Simulation 10:
   list(
-    nGenes = 15000, 
+    nGenes = 7500, 
     seed = 100, 
-    batchCells = c(1000, 1000, 1000, 1000),
-    batch.facLoc = 0.2,
-    batch.facScale = 0.4,
-    out.prob = 0.1, 
-    group.prob = c(0.18, 0.23, 0.12,0.07, 0.10, 0.3),
-    de.prob = c(0.3, 0.1, 0.4, 0.5, 0.2, 0.1),
-    de.downProb = c(0.1, 0.4, 0.2, 0.2, 0.1, 0.6),
+    batchCells = c(1000, 1000),
+    batch.facLoc = 0.3,
+    batch.facScale = 0.5,
+    out.prob = 0.15, 
+    group.prob = c(0.18, 0.23, 0.16,0.03, 0.10, 0.3),
+    de.prob = c(0.1, 0.1, 0.2, 0.2, 0.15, 0.1),
+    de.downProb = c(0.6, 0.7, 0.5, 0.7, 0.5, 0.8),
     de.facLoc = c(0.6, 0.01, 0.5, 0.45, 0.4, 0.01),
-    de.facScale = c(0.1, 0.4, 0.2, 0.25, 0.2, 0.5),
-    bcv.common = 0.8,
-    bcv.df = 5,
-    dropout.mid = c(1, 1, 3, 0.5),
-    dropout.shape = c(-1.5, -1.5, -1, -2),
+    de.facScale = c(0.2, 0.5, 0.3, 0.35, 0.3, 0.6),
+    bcv.common = 1.2,
+    bcv.df = 3,
+    dropout.mid = c(3, 5),
+    dropout.shape = c(-2.5, -2.5),
     dropout.type = 'batch',
     lib.loc = 15, 
-    lib.scale = 1.0
+    lib.scale = 1.2
   )
 )
 
@@ -321,7 +323,7 @@ run_simulation <- function(param_index, repetition, params_list, base_seeds) {
   
   # Create reference and test datasets
   print("Create ref")
-  seu_ref <- subset(seu, Batch %in% c('Batch1', 'Batch2'))
+  seu_ref <- subset(seu, Batch %in% c('Batch1'))
   
   seu_ref <- seu_ref %>% 
     NormalizeData() %>% 
@@ -335,7 +337,7 @@ run_simulation <- function(param_index, repetition, params_list, base_seeds) {
   seu_ref$Seurat_clusters <- seu_ref$originalexp_snn_res.0.2
   
   print("Create test")
-  seu_test <- subset(seu, Batch %in% c('Batch3', 'Batch4'))
+  seu_test <- subset(seu, Batch %in% c('Batch2'))
   
   seu_test <- seu_test %>%
     NormalizeData() %>%
@@ -348,6 +350,8 @@ run_simulation <- function(param_index, repetition, params_list, base_seeds) {
   
   seu_test$Seurat_clusters <- seu_test$originalexp_snn_res.0.2
   
+  library(qs)
+
   # Run CellMentor analysis
   print("CreateCSFNMFobject")
   object = CreateCSFNMFobject(seu_ref@assays$originalexp$counts, 
@@ -400,17 +404,6 @@ run_simulation <- function(param_index, repetition, params_list, base_seeds) {
     FindClusters(resolution = 0.2, verbose = F)
   
   seu_ref$CellMentor_clusters <- seu_ref$originalexp_snn_res.0.2
-  
-  file_method <- paste0('save_data_v3/simulation_method', SIM_NUMBER, '.qs')
-  file_seu <- paste0('save_data_v3/simulation_6tools', SIM_NUMBER, '.qs')
-  # Check if either file exists and exit the function if they do
-  if (file.exists(file_method) & file.exists(file_seu)) {
-    print("FILES ALREADY EXIST. SKIPPING EXECUTION.")
-    return(list(seu_test = qread(file_seu), 
-                seu_ref = seu_ref, 
-                optimal_params = optimal_params_meth,
-                simulation_params = sim_params))
-  }
   
   print('PCA')
   predictions <- SingleR::SingleR(
@@ -688,7 +681,7 @@ run_simulation <- function(param_index, repetition, params_list, base_seeds) {
     seu_test$scanvi_clusters,
     from = rownames(predictions),
     to = predictions$labels)
-
+  
   print('rssNMF')
 
   find_marker_genes <- function(seurat_obj, n_markers = 20) {
@@ -1202,6 +1195,7 @@ with open(r'%s', 'rb') as f:
   
   seu_test$cassl_clusters <- seu_test$originalexp_snn_res.0.2
   
+  
   # Save final results
   qsave(seu_test, 
         paste0('save_data_v3/simulation_6tools', SIM_NUMBER, '.qs'))
@@ -1273,7 +1267,7 @@ print("Summary of simulation runs:")
 print(table(summary_stats$param_set, summary_stats$success))
 
 # Save final combined results with timestamp
-final_filename <- paste0('save_data_v3/final_all_simulations_results_batch_multiseed_', 
+final_filename <- paste0('save_data_v3/final_all_simulations_results_wobatch_multiseed_', 
                          format(Sys.time(), "%Y%m%d_%H%M"), '.qs')
 qsave(list(
   results = results_list,
